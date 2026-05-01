@@ -4,13 +4,18 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { ArrowLeft, Printer, Download, Key } from "lucide-react";
+import { ArrowLeft, Printer, Download, Key, Pencil } from "lucide-react";
 import { GeneratedTests } from "@/services/db/generatedTests";
 import { useToast } from "@/hooks/use-toast";
 import { usePDFExport } from "@/hooks/usePDFExport";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useTestAutoRepair } from "@/hooks/useTestAutoRepair";
 import { ExamPrintTemplate } from "@/components/print/ExamPrintTemplate";
+import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
+import { Input } from "@/components/ui/input";
+import { Label } from "@/components/ui/label";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
+import { supabase } from "@/integrations/supabase/client";
 
 interface TestItem {
   question_text?: string;
@@ -83,13 +88,25 @@ export default function GeneratedTestPage() {
   const [test, setTest] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [showAnswerKey, setShowAnswerKey] = useState(false);
+  const [editOpen, setEditOpen] = useState(false);
+  const [editForm, setEditForm] = useState({ college: '', examType: '', subjectCode: '', subjectDescription: '', schoolYear: '' });
+  const [saving, setSaving] = useState(false);
+  const [college, setCollege] = useState<string | null>(null);
   const { checkAndRepair, isRepairing } = useTestAutoRepair(testId);
 
   useEffect(() => {
     if (testId) {
       fetchTest();
     }
+    fetchCollege();
   }, [testId]);
+
+  const fetchCollege = async () => {
+    const { data: { user } } = await supabase.auth.getUser();
+    if (!user) return;
+    const { data } = await supabase.from('profiles').select('college').eq('id', user.id).single();
+    setCollege(data?.college || null);
+  };
 
   const fetchTest = async () => {
     try {
@@ -137,9 +154,60 @@ export default function GeneratedTestPage() {
     }
   };
 
-  // Fixed: Navigate back to my-tests instead of non-existent /teacher/tests
   const handleBack = () => {
     navigate("/teacher/my-tests");
+  };
+
+  const openEditDialog = () => {
+    setEditForm({
+      college: college || '',
+      examType: test?.exam_period || '',
+      subjectCode: test?.course || '',
+      subjectDescription: test?.subject || '',
+      schoolYear: test?.school_year || '',
+    });
+    setEditOpen(true);
+  };
+
+  const handleSaveEdit = async () => {
+    if (!test || !testId) return;
+    setSaving(true);
+    try {
+      // Build new title from course + exam type
+      const newTitle = `${editForm.subjectCode || test.course} - ${editForm.examType || test.exam_period}`;
+      
+      await GeneratedTests.update(testId, {
+        course: editForm.subjectCode,
+        subject: editForm.subjectDescription,
+        exam_period: editForm.examType,
+        school_year: editForm.schoolYear,
+        title: newTitle,
+      });
+
+      // Update college in profile
+      const { data: { user } } = await supabase.auth.getUser();
+      if (user && editForm.college) {
+        await supabase.from('profiles').update({ college: editForm.college }).eq('id', user.id);
+        setCollege(editForm.college);
+      }
+
+      setTest((prev: any) => ({
+        ...prev,
+        course: editForm.subjectCode,
+        subject: editForm.subjectDescription,
+        exam_period: editForm.examType,
+        school_year: editForm.schoolYear,
+        title: newTitle,
+      }));
+
+      setEditOpen(false);
+      toast({ title: "Updated", description: "Test information saved successfully." });
+    } catch (error) {
+      console.error("Error updating test:", error);
+      toast({ title: "Error", description: "Failed to update test information.", variant: "destructive" });
+    } finally {
+      setSaving(false);
+    }
   };
 
   if (loading || isRepairing) {
@@ -228,14 +296,25 @@ export default function GeneratedTestPage() {
       <Card className="print:shadow-none print:border-none" id="test-content">
         <CardHeader className="text-center border-b print:border-black">
           <div className="space-y-2">
-            <h1 className="text-2xl font-bold">{test.title || "Examination"}</h1>
+            <div className="flex items-center justify-between">
+              <div className="flex-1" />
+              <h1 className="text-2xl font-bold flex-auto">{test.title || "Examination"}</h1>
+              <div className="flex-1 flex justify-end">
+                <Button variant="ghost" size="sm" onClick={openEditDialog} className="gap-1.5">
+                  <Pencil className="w-4 h-4" />
+                  Edit Info
+                </Button>
+              </div>
+            </div>
             <div className="flex flex-wrap justify-center gap-2 text-sm">
-              {test.subject && <Badge variant="secondary">{test.subject}</Badge>}
               {test.course && <Badge variant="secondary">{test.course}</Badge>}
-              {test.year_section && <Badge variant="secondary">{test.year_section}</Badge>}
+              {test.subject && <Badge variant="secondary">{test.subject}</Badge>}
               {test.exam_period && <Badge variant="secondary">{test.exam_period}</Badge>}
               {test.school_year && <Badge variant="secondary">SY {test.school_year}</Badge>}
             </div>
+            {college && (
+              <p className="text-sm text-muted-foreground">College: {college}</p>
+            )}
             
             {/* Student Info Section */}
             <div className="mt-4 pt-4 border-t text-left grid grid-cols-2 gap-4 text-sm">
@@ -265,6 +344,77 @@ export default function GeneratedTestPage() {
             </div>
           </div>
         </CardHeader>
+
+      {/* Edit Information Dialog */}
+      <Dialog open={editOpen} onOpenChange={setEditOpen}>
+        <DialogContent className="sm:max-w-md">
+          <DialogHeader>
+            <DialogTitle>Edit Test Information</DialogTitle>
+          </DialogHeader>
+          <div className="space-y-4 py-2">
+            <div className="space-y-2">
+              <Label htmlFor="edit-college">College</Label>
+              <Input
+                id="edit-college"
+                value={editForm.college}
+                onChange={(e) => setEditForm(f => ({ ...f, college: e.target.value }))}
+                placeholder="e.g. College of Information Technology"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-exam-type">Exam Type</Label>
+              <Select value={editForm.examType} onValueChange={(v) => setEditForm(f => ({ ...f, examType: v }))}>
+                <SelectTrigger id="edit-exam-type">
+                  <SelectValue placeholder="Select exam type" />
+                </SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="Midterm Examination">Midterm Examination</SelectItem>
+                  <SelectItem value="Final Examination">Final Examination</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-subject-code">Subject Code</Label>
+              <Input
+                id="edit-subject-code"
+                value={editForm.subjectCode}
+                onChange={(e) => setEditForm(f => ({ ...f, subjectCode: e.target.value }))}
+                placeholder="e.g. IT101"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-subject-desc">Subject Description</Label>
+              <Input
+                id="edit-subject-desc"
+                value={editForm.subjectDescription}
+                onChange={(e) => setEditForm(f => ({ ...f, subjectDescription: e.target.value }))}
+                placeholder="e.g. Introduction to Computing"
+              />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-school-year">Academic Year / School Year</Label>
+              <Input
+                id="edit-school-year"
+                value={editForm.schoolYear}
+                onChange={(e) => setEditForm(f => ({ ...f, schoolYear: e.target.value }))}
+                placeholder="e.g. 2024-2025"
+              />
+            </div>
+            <div className="text-sm text-muted-foreground">
+              <span className="font-medium">Date Generated:</span> {new Date(test.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}
+            </div>
+            <div className="text-sm text-muted-foreground">
+              <span className="font-medium">Total Points:</span> {totalPoints} (auto-calculated)
+            </div>
+          </div>
+          <DialogFooter>
+            <Button variant="outline" onClick={() => setEditOpen(false)}>Cancel</Button>
+            <Button onClick={handleSaveEdit} disabled={saving}>
+              {saving ? 'Saving...' : 'Save Changes'}
+            </Button>
+          </DialogFooter>
+        </DialogContent>
+      </Dialog>
 
         <CardContent className="pt-6 space-y-6">
           {/* Instructions */}

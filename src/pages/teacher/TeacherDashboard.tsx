@@ -10,12 +10,14 @@ import {
   BarChart3,
   Database,
   Layers,
-  Clock
+  Clock,
+  TrendingUp
 } from "lucide-react";
 import { supabase } from "@/integrations/supabase/client";
 import { useQuery } from "@tanstack/react-query";
 import { AreaChart, Area, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer } from "recharts";
 import { format, subMonths, startOfMonth, endOfMonth, eachWeekOfInterval, startOfWeek, endOfWeek, parseISO } from "date-fns";
+import { TopicCoverageChart } from "@/components/reports/TopicCoverageChart";
 
 export default function TeacherDashboard() {
   const navigate = useNavigate();
@@ -215,7 +217,49 @@ export default function TeacherDashboard() {
         </CardContent>
       </Card>
 
-      {/* Recent Tests - Replaced Test History card */}
+      {/* Activity Stats Row */}
+      <div className="grid gap-4 md:grid-cols-2">
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Avg. Questions per Test</CardTitle>
+            <TrendingUp className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">
+              {stats?.totalTests && stats.totalTests > 0
+                ? Math.round(stats.totalQuestions / stats.totalTests)
+                : 0}
+            </div>
+            <p className="text-xs text-muted-foreground">Average test length</p>
+          </CardContent>
+        </Card>
+        <Card>
+          <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-2">
+            <CardTitle className="text-sm font-medium">Question Bank Usage</CardTitle>
+            <Database className="h-4 w-4 text-muted-foreground" />
+          </CardHeader>
+          <CardContent>
+            <div className="text-2xl font-bold">{stats?.totalQuestions || 0}</div>
+            <p className="text-xs text-muted-foreground">Available questions across all topics</p>
+          </CardContent>
+        </Card>
+      </div>
+
+      {/* Topic Coverage */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <BarChart3 className="h-5 w-5 text-primary" />
+            Topic Coverage
+          </CardTitle>
+          <CardDescription>Distribution of questions by topic across your generated tests</CardDescription>
+        </CardHeader>
+        <CardContent>
+          <TopicCoverageChart />
+        </CardContent>
+      </Card>
+
+      {/* Recent Tests */}
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">

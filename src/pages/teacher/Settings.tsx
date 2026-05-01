@@ -26,7 +26,7 @@ function PasswordRequirement({ met, label }: { met: boolean; label: string }) {
 interface ProfileData {
   full_name: string;
   email: string;
-  institution: string;
+  college: string;
   avatar_url: string;
 }
 
@@ -41,7 +41,7 @@ export default function Settings() {
   const [profile, setProfile] = useState<ProfileData>({
     full_name: '',
     email: '',
-    institution: '',
+    college: '',
     avatar_url: ''
   });
 
@@ -56,7 +56,7 @@ export default function Settings() {
       setLoading(true);
       const { data, error } = await supabase
         .from('profiles')
-        .select('full_name, email, institution, avatar_url')
+        .select('full_name, email, college, avatar_url')
         .eq('id', user?.id)
         .single();
 
@@ -65,7 +65,7 @@ export default function Settings() {
       setProfile({
         full_name: data?.full_name || '',
         email: data?.email || user?.email || '',
-        institution: data?.institution || '',
+        college: data?.college || '',
         avatar_url: data?.avatar_url || ''
       });
     } catch (error) {
@@ -84,7 +84,7 @@ export default function Settings() {
         .from('profiles')
         .update({
           full_name: profile.full_name,
-          institution: profile.institution,
+          college: profile.college,
           updated_at: new Date().toISOString()
         })
         .eq('id', user.id);
@@ -219,7 +219,7 @@ export default function Settings() {
         <CardHeader>
           <CardTitle>Profile Information</CardTitle>
           <CardDescription>
-            Update your personal details. Your institution name will appear on generated TOS and printed outputs.
+            Update your personal details. Your college name will appear on generated TOS and printed outputs.
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-6">
@@ -287,12 +287,12 @@ export default function Settings() {
             </div>
 
             <div className="space-y-2">
-              <Label htmlFor="institution">Institution</Label>
+              <Label htmlFor="college">College</Label>
               <Input 
-                id="institution" 
-                placeholder="e.g., University of the Philippines"
-                value={profile.institution}
-                onChange={(e) => setProfile(prev => ({ ...prev, institution: e.target.value }))}
+                id="college" 
+                placeholder="e.g., College of Education"
+                value={profile.college}
+                onChange={(e) => setProfile(prev => ({ ...prev, college: e.target.value }))}
               />
               <p className="text-xs text-muted-foreground">
                 This will appear on your TOS headers and printed test outputs

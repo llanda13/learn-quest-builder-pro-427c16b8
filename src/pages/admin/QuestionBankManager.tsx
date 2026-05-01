@@ -11,17 +11,16 @@ import { ScrollArea } from "@/components/ui/scroll-area";
 import { Separator } from "@/components/ui/separator";
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
 import { Plus, Search, Edit, Trash2, Save, X, Filter, FileText, BarChart3 } from "lucide-react";
+import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { supabase } from "@/integrations/supabase/client";
 import { toast } from "sonner";
 import { Questions, type Question } from "@/services/db/questions";
-import {
-  CATEGORIES,
-  CATEGORY_CONFIG,
-  getSpecializations,
-  getSubjectCodes,
-  getSubjectDescription,
-} from "@/config/questionBankFilters";
 import { QuestionBankReports } from "@/components/admin/QuestionBankReports";
+import { FilterManagement } from "@/components/admin/FilterManagement";
+import { useUserRole } from "@/hooks/useUserRole";
+import { useAcademicHierarchy } from "@/hooks/useAcademicHierarchy";
+import { Settings2 } from "lucide-react";
+import { normalizeCategory, normalizeSpecialization } from "@/utils/acronymNormalizer";
 
 const ALL_BLOOM_LEVELS = ["Remembering", "Understanding", "Applying", "Analyzing", "Evaluating", "Creating"];
 
@@ -31,38 +30,17 @@ const DIFFICULTY_COGNITIVE_MAP: Record<string, string[]> = {
   Difficult: ["Evaluating", "Creating"],
 };
 
-// Gather all unique specializations across all categories
-function getAllSpecializations(): string[] {
-  const set = new Set<string>();
-  Object.values(CATEGORY_CONFIG).forEach((cat) =>
-    cat.specializations.forEach((s) => set.add(s.name))
-  );
-  return Array.from(set).sort();
-}
-
-// Gather all unique subject codes across all categories (optionally filtered by specialization)
-function getAllSubjectCodes(specialization?: string): { code: string; description: string }[] {
-  const map = new Map<string, string>();
-  Object.values(CATEGORY_CONFIG).forEach((cat) =>
-    cat.specializations.forEach((s) => {
-      if (specialization && s.name !== specialization) return;
-      s.subjects.forEach((sub) => {
-        if (!map.has(sub.code)) map.set(sub.code, sub.description);
-      });
-    })
-  );
-  return Array.from(map.entries())
-    .map(([code, description]) => ({ code, description }))
-    .sort((a, b) => a.code.localeCompare(b.code));
-}
+// These helper functions are no longer needed - replaced by useAcademicHierarchy hook
 
 export default function QuestionBankManager() {
   const [searchQuery, setSearchQuery] = useState("");
   const [editingId, setEditingId] = useState<string | null>(null);
   const [isCreating, setIsCreating] = useState(false);
   const [selectedIds, setSelectedIds] = useState<Set<string>>(new Set());
-  const [activeView, setActiveView] = useState<"questions" | "reports">("questions");
+  const [activeView, setActiveView] = useState<"questions" | "reports" | "manage-filters">("questions");
+  const hierarchy = useAcademicHierarchy();
   const queryClient = useQueryClient();
+  const { isAdmin } = useUserRole();
 
   // Cascading filters
   const [filterCategory, setFilterCategory] = useState<string>("all");
@@ -73,7 +51,7 @@ export default function QuestionBankManager() {
   // Form state
   const [formData, setFormData] = useState({
     question_text: "",
-    question_type: "mcq" as const,
+    question_type: "mcq" as string,
     choices: [] as any[],
     correct_answer: "",
     topic: "",
@@ -104,30 +82,28 @@ export default function QuestionBankManager() {
     },
   });
 
-  // --- Filter dropdown options ---
+  // --- Filter dropdown options (DB-driven) ---
   const specializationOptions = useMemo(() => {
-    if (filterCategory === "all") return getAllSpecializations();
-    return getSpecializations(filterCategory);
-  }, [filterCategory]);
+    if (filterCategory === "all") return hierarchy.allSpecializations.map(s => s.name);
+    const cat = hierarchy.categories.find(c => c.name === filterCategory);
+    if (!cat) return [];
+    return hierarchy.getSpecializations(cat.id).map(s => s.name);
+  }, [filterCategory, hierarchy.categories, hierarchy.allSpecializations]);
 
   const subjectCodeOptions = useMemo(() => {
-    if (filterCategory === "all" && filterSpecialization === "all") return getAllSubjectCodes();
-    if (filterCategory === "all" && filterSpecialization !== "all") return getAllSubjectCodes(filterSpecialization);
-    if (filterSpecialization === "all") return [];
-    return getSubjectCodes(filterCategory, filterSpecialization);
-  }, [filterCategory, filterSpecialization]);
+    if (filterSpecialization === "all") {
+      return hierarchy.allSubjects.map(s => ({ code: s.code, description: s.description }));
+    }
+    const spec = hierarchy.allSpecializations.find(s => s.name === filterSpecialization);
+    if (!spec) return [];
+    return hierarchy.getSubjects(spec.id).map(s => ({ code: s.code, description: s.description }));
+  }, [filterSpecialization, hierarchy.allSpecializations, hierarchy.allSubjects]);
 
   const computedSubjectDescription = useMemo(() => {
     if (filterSubjectCode === "all") return "";
-    // Try exact config lookup first
-    if (filterCategory !== "all" && filterSpecialization !== "all") {
-      return getSubjectDescription(filterCategory, filterSpecialization, filterSubjectCode);
-    }
-    // Fallback: find in all subject codes
-    const match = getAllSubjectCodes(filterSpecialization !== "all" ? filterSpecialization : undefined)
-      .find((s) => s.code === filterSubjectCode);
+    const match = subjectCodeOptions.find(s => s.code === filterSubjectCode);
     return match?.description || "";
-  }, [filterCategory, filterSpecialization, filterSubjectCode]);
+  }, [filterSubjectCode, subjectCodeOptions]);
 
   // Cascading reset handlers
   const handleCategoryChange = (value: string) => {
@@ -164,10 +140,18 @@ export default function QuestionBankManager() {
     }
 
     if (filterCategory !== "all") {
-      result = result.filter((q) => (q as any).category === filterCategory);
+      const normFilter = normalizeCategory(filterCategory) || filterCategory;
+      result = result.filter((q) => {
+        const qCat = normalizeCategory((q as any).category) || (q as any).category;
+        return qCat === normFilter;
+      });
     }
     if (filterSpecialization !== "all") {
-      result = result.filter((q) => (q as any).specialization === filterSpecialization);
+      const normFilter = normalizeSpecialization(filterSpecialization) || filterSpecialization;
+      result = result.filter((q) => {
+        const qSpec = normalizeSpecialization((q as any).specialization) || (q as any).specialization;
+        return qSpec === normFilter;
+      });
     }
     if (filterSubjectCode !== "all") {
       result = result.filter((q) => (q as any).subject_code === filterSubjectCode);
@@ -186,16 +170,20 @@ export default function QuestionBankManager() {
     return ALL_BLOOM_LEVELS.filter((l) => levels.has(l));
   }, [formDifficultyDomain]);
 
-  // --- Form specialization options ---
+  // --- Form specialization options (DB-driven) ---
   const formSpecializationOptions = useMemo(() => {
-    if (!formData.category) return [];
-    return getSpecializations(formData.category);
-  }, [formData.category]);
+    if (!formData.category) return [] as string[];
+    const cat = hierarchy.categories.find(c => c.name === formData.category);
+    if (!cat) return [] as string[];
+    return hierarchy.getSpecializations(cat.id).map(s => s.name);
+  }, [formData.category, hierarchy.categories, hierarchy.allSpecializations]);
 
   const formSubjectCodeOptions = useMemo(() => {
-    if (!formData.category || !formData.specialization) return [];
-    return getSubjectCodes(formData.category, formData.specialization);
-  }, [formData.category, formData.specialization]);
+    if (!formData.specialization) return [] as { code: string; description: string }[];
+    const spec = hierarchy.allSpecializations.find(s => s.name === formData.specialization);
+    if (!spec) return [] as { code: string; description: string }[];
+    return hierarchy.getSubjects(spec.id).map(s => ({ code: s.code, description: s.description }));
+  }, [formData.specialization, hierarchy.allSpecializations, hierarchy.allSubjects]);
 
   // --- Mutations ---
   const createMutation = useMutation({
@@ -212,7 +200,10 @@ export default function QuestionBankManager() {
       toast.success("Question created successfully");
       resetForm();
     },
-    onError: () => toast.error("Failed to create question"),
+    onError: (err: any) => {
+      console.error("Create question error:", err);
+      toast.error(`Failed to create question: ${err?.message || "Unknown error"}`);
+    },
   });
 
   const updateMutation = useMutation({
@@ -304,6 +295,35 @@ export default function QuestionBankManager() {
     if (formCustomCategory) finalData.category = formCustomCategory;
     if (formCustomSpecialization) finalData.specialization = formCustomSpecialization;
 
+    // Normalize acronyms/full forms before saving
+    finalData.category = normalizeCategory(finalData.category) || finalData.category;
+    finalData.specialization = normalizeSpecialization(finalData.specialization) || finalData.specialization;
+
+    // Map difficulty domain checkboxes to the difficulty field (DB expects lowercase)
+    if (!finalData.difficulty && formDifficultyDomain.length > 0) {
+      // Use the first selected difficulty, lowercased to match DB constraint
+      finalData.difficulty = formDifficultyDomain[0].toLowerCase();
+    }
+
+    // Sync bloom_level from cognitive_level if not set
+    if (!finalData.bloom_level && finalData.cognitive_level) {
+      finalData.bloom_level = finalData.cognitive_level;
+    }
+
+    // Ensure topic has a value (required NOT NULL in DB)
+    if (!finalData.topic) {
+      finalData.topic = finalData.subject_description || finalData.subject_code || finalData.category || "General";
+    }
+
+    // Ensure choices is proper JSON for the DB
+    if (finalData.question_type === "mcq" && typeof finalData.choices === "object" && !Array.isArray(finalData.choices)) {
+      // Already an object like {A, B, C, D} - keep as is
+    } else if (finalData.question_type === "true_false") {
+      finalData.choices = { A: "True", B: "False" } as any;
+    } else if (["identification", "essay", "fill_blank"].includes(finalData.question_type)) {
+      finalData.choices = null as any;
+    }
+
     if (editingId) updateMutation.mutate({ id: editingId, data: finalData });
     else createMutation.mutate(finalData);
   };
@@ -363,11 +383,13 @@ export default function QuestionBankManager() {
         key={q.id}
         className="flex items-start gap-3 p-4 rounded-lg border border-border bg-card hover:bg-accent/50 transition-colors"
       >
-        <Checkbox
-          checked={selectedIds.has(q.id)}
-          onCheckedChange={() => toggleSelect(q.id)}
-          className="mt-1"
-        />
+        {isAdmin && (
+          <Checkbox
+            checked={selectedIds.has(q.id)}
+            onCheckedChange={() => toggleSelect(q.id)}
+            className="mt-1"
+          />
+        )}
         <div className="flex-1 min-w-0">
           <p className="text-sm font-medium text-foreground leading-relaxed">
             {q.question_text}
@@ -397,17 +419,21 @@ export default function QuestionBankManager() {
           </div>
         </div>
         <div className="flex gap-1 shrink-0">
-          <Button size="icon" variant="ghost" onClick={() => handleEdit(q)}>
-            <Edit className="h-4 w-4" />
-          </Button>
-          <Button
-            size="icon"
-            variant="ghost"
-            className="text-destructive"
-            onClick={() => deleteMutation.mutate(q.id)}
-          >
-            <Trash2 className="h-4 w-4" />
-          </Button>
+          {isAdmin && (
+            <>
+              <Button size="icon" variant="ghost" onClick={() => handleEdit(q)}>
+                <Edit className="h-4 w-4" />
+              </Button>
+              <Button
+                size="icon"
+                variant="ghost"
+                className="text-destructive"
+                onClick={() => deleteMutation.mutate(q.id)}
+              >
+                <Trash2 className="h-4 w-4" />
+              </Button>
+            </>
+          )}
         </div>
       </div>
     );
@@ -438,8 +464,8 @@ export default function QuestionBankManager() {
             >
               <SelectTrigger><SelectValue placeholder="Select category" /></SelectTrigger>
               <SelectContent>
-                {CATEGORIES.map((c) => (
-                  <SelectItem key={c} value={c}>{c}</SelectItem>
+                {hierarchy.categories.map((c) => (
+                  <SelectItem key={c.id} value={c.name}>{c.name}</SelectItem>
                 ))}
                 <SelectItem value="__custom__">Other (type below)</SelectItem>
               </SelectContent>
@@ -495,8 +521,8 @@ export default function QuestionBankManager() {
               <Select
                 value={formData.subject_code || undefined}
                 onValueChange={(v) => {
-                  const desc = getSubjectDescription(formData.category, formData.specialization, v);
-                  setFormData({ ...formData, subject_code: v, subject_description: desc });
+                  const match = formSubjectCodeOptions.find(s => s.code === v);
+                  setFormData({ ...formData, subject_code: v, subject_description: match?.description || "" });
                 }}
               >
                 <SelectTrigger><SelectValue placeholder="Select code" /></SelectTrigger>
@@ -526,17 +552,135 @@ export default function QuestionBankManager() {
           </div>
         </div>
 
-        {/* Row 3: Question Text (large) */}
+        {/* Row 3: Question Type */}
+        <div className="space-y-2">
+          <Label>Question Type</Label>
+          <RadioGroup
+            value={formData.question_type}
+            onValueChange={(v) => {
+              const type = v as typeof formData.question_type;
+              let choices: any[] = [];
+              let correct_answer = "";
+              if (type === "mcq") {
+                choices = { A: "", B: "", C: "", D: "" } as any;
+              } else if (type === "true_false") {
+                choices = { A: "True", B: "False" } as any;
+              }
+              setFormData({ ...formData, question_type: type, choices, correct_answer });
+            }}
+            className="flex flex-wrap gap-4 pt-1"
+          >
+            {[
+              { value: "mcq", label: "Multiple Choice" },
+              { value: "true_false", label: "True/False" },
+              { value: "identification", label: "Identification" },
+              { value: "essay", label: "Essay" },
+              { value: "fill_blank", label: "Fill in the Blank" },
+            ].map((opt) => (
+              <label key={opt.value} className="flex items-center gap-2 cursor-pointer">
+                <RadioGroupItem value={opt.value} />
+                <span className="text-sm">{opt.label}</span>
+              </label>
+            ))}
+          </RadioGroup>
+        </div>
+
+        {/* Row 4: Question Text */}
         <div className="space-y-2">
           <Label>Question Text</Label>
           <Textarea
             value={formData.question_text}
             onChange={(e) => setFormData({ ...formData, question_text: e.target.value })}
-            rows={5}
-            placeholder="Enter question text..."
-            className="min-h-[120px]"
+            rows={formData.question_type === "essay" ? 8 : 5}
+            placeholder={
+              formData.question_type === "essay"
+                ? "Enter essay prompt or question..."
+                : formData.question_type === "fill_blank"
+                ? "Enter question with ___ for the blank..."
+                : "Enter question text..."
+            }
+            className={formData.question_type === "essay" ? "min-h-[180px]" : "min-h-[120px]"}
           />
         </div>
+
+        {/* Topic field */}
+        <div className="space-y-2">
+          <Label>Topic</Label>
+          <Input
+            placeholder="Enter topic (e.g., Data Structures, Programming Basics)"
+            value={formData.topic}
+            onChange={(e) => setFormData({ ...formData, topic: e.target.value })}
+          />
+        </div>
+
+        {/* Conditional: MCQ choices & correct answer */}
+        {formData.question_type === "mcq" && (
+          <div className="space-y-3">
+            <Label>Answer Choices</Label>
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3">
+              {["A", "B", "C", "D"].map((key) => (
+                <div key={key} className="flex items-center gap-2">
+                  <span className="text-sm font-semibold w-6">{key}.</span>
+                  <Input
+                    placeholder={`Option ${key}`}
+                    value={(formData.choices as any)?.[key] || ""}
+                    onChange={(e) => {
+                      const updated = { ...(formData.choices as any || {}), [key]: e.target.value };
+                      setFormData({ ...formData, choices: updated });
+                    }}
+                  />
+                </div>
+              ))}
+            </div>
+            <div className="space-y-2">
+              <Label>Correct Answer</Label>
+              <Select
+                value={formData.correct_answer || undefined}
+                onValueChange={(v) => setFormData({ ...formData, correct_answer: v })}
+              >
+                <SelectTrigger className="w-40"><SelectValue placeholder="Select answer" /></SelectTrigger>
+                <SelectContent>
+                  {["A", "B", "C", "D"].map((k) => (
+                    <SelectItem key={k} value={k}>{k}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
+          </div>
+        )}
+
+        {/* Conditional: True/False correct answer */}
+        {formData.question_type === "true_false" && (
+          <div className="space-y-2">
+            <Label>Correct Answer</Label>
+            <RadioGroup
+              value={formData.correct_answer}
+              onValueChange={(v) => setFormData({ ...formData, correct_answer: v })}
+              className="flex gap-6 pt-1"
+            >
+              <label className="flex items-center gap-2 cursor-pointer">
+                <RadioGroupItem value="True" />
+                <span className="text-sm">True</span>
+              </label>
+              <label className="flex items-center gap-2 cursor-pointer">
+                <RadioGroupItem value="False" />
+                <span className="text-sm">False</span>
+              </label>
+            </RadioGroup>
+          </div>
+        )}
+
+        {/* Conditional: Identification / Fill in the Blank correct answer */}
+        {(formData.question_type === "identification" || formData.question_type === "fill_blank") && (
+          <div className="space-y-2">
+            <Label>Correct Answer</Label>
+            <Input
+              placeholder={formData.question_type === "fill_blank" ? "Enter the word/phrase for the blank" : "Enter the correct answer"}
+              value={formData.correct_answer}
+              onChange={(e) => setFormData({ ...formData, correct_answer: e.target.value })}
+            />
+          </div>
+        )}
 
         {/* Row 4: Cognitive Domain (difficulty checkboxes) + Cognitive Level */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
@@ -593,8 +737,10 @@ export default function QuestionBankManager() {
     <div className="p-6 space-y-4">
       <div className="flex items-center justify-between">
         <div>
-          <h1 className="text-3xl font-bold">Question Bank Manager</h1>
-          <p className="text-muted-foreground">Full CRUD access to master question repository</p>
+          <h1 className="text-3xl font-bold">Question Bank{isAdmin ? " Manager" : ""}</h1>
+          <p className="text-muted-foreground">
+            {isAdmin ? "Full CRUD access to master question repository" : "Browse and add questions to the repository"}
+          </p>
         </div>
         <Button onClick={() => setIsCreating(true)} size="lg">
           <Plus className="h-4 w-4 mr-2" />
@@ -603,7 +749,7 @@ export default function QuestionBankManager() {
       </div>
 
       {/* Create/Edit Form */}
-      {(isCreating || editingId) && renderForm()}
+      {(isCreating || (editingId && isAdmin)) && renderForm()}
 
       <div className="flex flex-col lg:flex-row gap-4">
         {/* Left Filter Panel */}
@@ -626,8 +772,8 @@ export default function QuestionBankManager() {
                   <SelectTrigger className="h-8 text-xs"><SelectValue /></SelectTrigger>
                   <SelectContent>
                     <SelectItem value="all">All Categories</SelectItem>
-                    {CATEGORIES.map((c) => (
-                      <SelectItem key={c} value={c}>{c}</SelectItem>
+                    {hierarchy.categories.map((c) => (
+                      <SelectItem key={c.id} value={c.name}>{c.name}</SelectItem>
                     ))}
                   </SelectContent>
                 </Select>
@@ -721,15 +867,28 @@ export default function QuestionBankManager() {
                 <BarChart3 className="h-4 w-4" />
                 Reports
               </Button>
+              {isAdmin && (
+                <Button
+                  variant={activeView === "manage-filters" ? "default" : "outline"}
+                  size="sm"
+                  onClick={() => setActiveView("manage-filters")}
+                  className="gap-1.5"
+                >
+                  <Settings2 className="h-4 w-4" />
+                  Manage Filters
+                </Button>
+              )}
             </div>
           </div>
 
-          {activeView === "reports" ? (
+          {activeView === "manage-filters" ? (
+            <FilterManagement />
+          ) : activeView === "reports" ? (
             <QuestionBankReports questions={filteredQuestions} />
           ) : (
             <>
-              {/* Bulk Actions */}
-              {selectedIds.size > 0 && (
+              {/* Bulk Actions - Admin only */}
+              {isAdmin && selectedIds.size > 0 && (
                 <div className="flex items-center gap-3 p-3 rounded-lg bg-muted border">
                   <span className="text-sm font-medium">{selectedIds.size} selected</span>
                   <Separator orientation="vertical" className="h-5" />
@@ -750,10 +909,12 @@ export default function QuestionBankManager() {
               {/* Results count + select all */}
               <div className="flex items-center justify-between text-sm text-muted-foreground">
                 <div className="flex items-center gap-2">
-                  <Checkbox
-                    checked={filteredQuestions.length > 0 && selectedIds.size === filteredQuestions.length}
-                    onCheckedChange={toggleSelectAll}
-                  />
+                  {isAdmin && (
+                    <Checkbox
+                      checked={filteredQuestions.length > 0 && selectedIds.size === filteredQuestions.length}
+                      onCheckedChange={toggleSelectAll}
+                    />
+                  )}
                   <span>{filteredQuestions.length} questions</span>
                 </div>
               </div>
