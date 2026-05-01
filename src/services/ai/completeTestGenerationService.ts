@@ -219,54 +219,44 @@ function buildCriteriaFromTOS(tosMatrix: any): TOSCriteria[] {
   Object.keys(distribution).forEach(topicName => {
     const topicDist = distribution[topicName];
     
-    // Map Bloom levels
-    const bloomLevels: Array<{ level: BloomLevel, items: number[] }> = [
-      { level: 'remembering', items: topicDist.remembering || [] },
-      { level: 'understanding', items: topicDist.understanding || [] },
-      { level: 'applying', items: topicDist.applying || [] },
-      { level: 'analyzing', items: topicDist.analyzing || [] },
-      { level: 'evaluating', items: topicDist.evaluating || [] },
-      { level: 'creating', items: topicDist.creating || [] }
+    // Map Bloom levels — handle both object format {count, items} and array format
+    const bloomLevels: Array<{ level: BloomLevel, count: number }> = [
+      { level: 'remembering', count: getBloomCount(topicDist.remembering) },
+      { level: 'understanding', count: getBloomCount(topicDist.understanding) },
+      { level: 'applying', count: getBloomCount(topicDist.applying) },
+      { level: 'analyzing', count: getBloomCount(topicDist.analyzing) },
+      { level: 'evaluating', count: getBloomCount(topicDist.evaluating) },
+      { level: 'creating', count: getBloomCount(topicDist.creating) }
     ];
 
-    bloomLevels.forEach(({ level, items }) => {
-      if (items.length > 0) {
-        // Distribute across difficulty levels
-        const easyCount = Math.ceil(items.length * 0.3);
-        const mediumCount = Math.ceil(items.length * 0.5);
-        const hardCount = items.length - easyCount - mediumCount;
-
-        if (easyCount > 0) {
-          criteria.push({
-            topic: topicName,
-            bloomLevel: level,
-            difficulty: 'easy',
-            count: easyCount
-          });
-        }
-
-        if (mediumCount > 0) {
-          criteria.push({
-            topic: topicName,
-            bloomLevel: level,
-            difficulty: 'average',
-            count: mediumCount
-          });
-        }
-
-        if (hardCount > 0) {
-          criteria.push({
-            topic: topicName,
-            bloomLevel: level,
-            difficulty: 'difficult',
-            count: hardCount
-          });
-        }
+    bloomLevels.forEach(({ level, count }) => {
+      if (count > 0) {
+        // Map bloom level to difficulty directly (no sub-splitting that inflates counts)
+        const difficulty: Difficulty = 
+          ['remembering', 'understanding'].includes(level) ? 'easy' :
+          ['applying', 'analyzing'].includes(level) ? 'average' : 'difficult';
+        
+        criteria.push({
+          topic: topicName,
+          bloomLevel: level,
+          difficulty,
+          count
+        });
       }
     });
   });
 
   return criteria;
+}
+
+/**
+ * Extract count from bloom distribution data (handles both formats)
+ */
+function getBloomCount(bloomData: any): number {
+  if (!bloomData) return 0;
+  if (typeof bloomData === 'object' && 'count' in bloomData) return bloomData.count;
+  if (Array.isArray(bloomData)) return bloomData.length;
+  return 0;
 }
 
 /**

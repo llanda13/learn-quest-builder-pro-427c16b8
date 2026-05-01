@@ -9,6 +9,7 @@
  */
 
 import { CATEGORY_CONFIG, type SubjectEntry } from '@/config/questionBankFilters';
+import { normalizeCategory, normalizeSpecialization } from '@/utils/acronymNormalizer';
 
 export interface SubjectMetadata {
   category: string;
@@ -32,7 +33,10 @@ export function resolveSubjectMetadata(context: {
   category?: string;
   specialization?: string;
 }): SubjectMetadata {
-  const { subject, topic, subject_code, subject_description, category, specialization } = context;
+  // Normalize acronyms/full forms before processing
+  const category = normalizeCategory(context.category) || undefined;
+  const specialization = normalizeSpecialization(context.specialization) || undefined;
+  const { subject, topic, subject_code, subject_description } = context;
 
   // If all fields are already provided, validate and return
   if (category && specialization && subject_code && subject_description) {

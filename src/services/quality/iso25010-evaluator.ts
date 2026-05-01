@@ -1,4 +1,5 @@
 import { supabase } from '@/integrations/supabase/client';
+import { generateUUID } from '@/utils/uuid';
 
 export interface QualityMetric {
   name: string;
@@ -462,7 +463,7 @@ class ISO25010Evaluator {
     try {
       await supabase.from('quality_assessments').insert({
         entity_type: 'system',
-        entity_id: crypto.randomUUID(),
+        entity_id: generateUUID(),
         overall_score: assessment.overallScore,
         compliance_level: assessment.complianceLevel,
         characteristics: assessment.characteristics as any,

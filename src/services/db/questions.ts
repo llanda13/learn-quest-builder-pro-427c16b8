@@ -132,7 +132,7 @@ export const Questions = {
   async delete(id: string): Promise<void> {
     const { error } = await supabase
       .from('questions')
-      .delete()
+      .update({ deleted: true, updated_at: new Date().toISOString() } as any)
       .eq('id', id);
 
     if (error) throw error;

@@ -72,11 +72,12 @@ export async function generateFormatAwareTest(
     throw new Error("User not authenticated");
   }
 
-  // Calculate total items needed
-  const totalItems = config.tosCriteria.reduce((sum, c) => sum + c.count, 0);
+  // Calculate total items needed from TOS (this is the CONTRACT)
+  const requiredTotal = config.tosCriteria.reduce((sum, c) => sum + c.count, 0);
+  console.log(`📊 TOS CONTRACT: ${requiredTotal} total questions required`);
   
   // Scale format sections to match total items
-  const scaledSections = scaledFormatSections(config.format, totalItems);
+  const scaledSections = scaledFormatSections(config.format, requiredTotal);
   
   console.log("📐 Scaled sections:", scaledSections.map(s => 
     `${s.label}: ${s.endNumber - s.startNumber + 1} ${s.questionType}`
@@ -87,6 +88,15 @@ export async function generateFormatAwareTest(
     config.tosCriteria,
     scaledSections
   );
+
+  // Validate distribution: total assigned must equal TOS total
+  let totalAssigned = 0;
+  for (const [sectionId, criteria] of sectionAssignments.entries()) {
+    const sectionAssignedCount = criteria.reduce((sum, c) => sum + c.count, 0);
+    totalAssigned += sectionAssignedCount;
+    console.log(`   Section ${sectionId}: ${sectionAssignedCount} items assigned`);
+  }
+  console.log(`📊 Distribution check: ${totalAssigned}/${requiredTotal} items assigned to sections`);
 
   // Generate questions for each section
   const sectionResults: FormatAwareTestResult['sections'] = [];
@@ -110,7 +120,8 @@ export async function generateFormatAwareTest(
     console.log(`\n📦 Generating Section ${section.label}: ${section.title}`);
     console.log(`   Need: ${actualQuestionCount} ${section.questionType} question(s) (covering items ${section.startNumber}-${section.endNumber})`);
 
-    const sectionQuestions = await generateSectionQuestions(
+    // Generate with retry to ensure exact count
+    let sectionQuestions = await generateSectionQuestions(
       section,
       sectionCriteria,
       actualQuestionCount,
@@ -119,6 +130,29 @@ export async function generateFormatAwareTest(
       uniquenessStore,
       allQuestionTexts
     );
+
+    // COMPLETION GATE: Retry if section is short
+    let retryAttempt = 0;
+    const MAX_SECTION_RETRIES = 2;
+    while (sectionQuestions.length < actualQuestionCount && retryAttempt < MAX_SECTION_RETRIES) {
+      retryAttempt++;
+      const shortfall = actualQuestionCount - sectionQuestions.length;
+      console.log(`   🔄 Section ${section.label} retry ${retryAttempt}: need ${shortfall} more ${section.questionType} questions`);
+      
+      const repairQuestions = await generateSectionQuestions(
+        section,
+        sectionCriteria.length > 0 ? sectionCriteria : config.tosCriteria.slice(0, 1),
+        shortfall,
+        globalQuestionNumber + sectionQuestions.length,
+        user.id,
+        uniquenessStore,
+        allQuestionTexts
+      );
+      sectionQuestions = [...sectionQuestions, ...repairQuestions];
+    }
+
+    // Trim to exact count
+    sectionQuestions = sectionQuestions.slice(0, actualQuestionCount);
 
     // Calculate points correctly for essays (essayCount * pointsPerQuestion) vs regular (count * 1)
     const sectionPoints = section.questionType === 'essay' && section.essayCount
@@ -174,12 +208,24 @@ export async function generateFormatAwareTest(
     allQuestions.push(...mappedQuestions);
     globalQuestionNumber += mappedQuestions.length;
     
-    console.log(`   ✓ Generated ${mappedQuestions.length} question(s) (${sectionPoints} pts)`);
+    console.log(`   ✓ Generated ${mappedQuestions.length}/${actualQuestionCount} question(s) (${sectionPoints} pts)`);
   }
 
   const totalPoints = sectionResults.reduce((sum, s) => sum + s.totalPoints, 0);
 
-  console.log(`\n✅ Total: ${allQuestions.length} questions, ${totalPoints} points`);
+  // ============= FINAL VALIDATION GATE =============
+  console.log(`\n📊 FINAL VALIDATION: ${allQuestions.length}/${requiredTotal} questions generated`);
+  
+  if (allQuestions.length < requiredTotal) {
+    const shortfall = requiredTotal - allQuestions.length;
+    console.error(`❌ TOS CONTRACT VIOLATION: ${allQuestions.length}/${requiredTotal} questions (missing ${shortfall})`);
+    throw new Error(
+      `Test generation incomplete: generated ${allQuestions.length}/${requiredTotal} questions. ` +
+      `${shortfall} questions could not be generated. Please try again.`
+    );
+  }
+
+  console.log(`✅ TOS CONTRACT SATISFIED: ${allQuestions.length}/${requiredTotal} questions`);
 
   // Save to database - cast items and answer_key to Json type
   const testData = {
@@ -235,19 +281,21 @@ function distributeCriteriaToSections(
   // Create a pool of criteria with remaining counts
   const criteriaPool = criteria.map(c => ({ ...c, remaining: c.count }));
   
+  // Priority mapping: which Bloom levels work best for each question type
+  const bloomPriority: Record<QuestionType, string[]> = {
+    mcq: ['remembering', 'understanding', 'applying', 'analyzing', 'evaluating', 'creating'],
+    true_false: ['remembering', 'understanding'],
+    fill_blank: ['remembering', 'understanding', 'applying'],
+    essay: ['evaluating', 'creating', 'analyzing', 'applying']
+  };
+
   // Assign criteria to sections based on Bloom level suitability
   for (const section of sections) {
-    const sectionCount = section.endNumber - section.startNumber + 1;
+    const sectionCount = section.questionType === 'essay' && section.essayCount
+      ? section.essayCount
+      : section.endNumber - section.startNumber + 1;
     const sectionCriteria: TOSCriteria[] = [];
     let assigned = 0;
-    
-    // Priority mapping: which Bloom levels work best for each question type
-    const bloomPriority: Record<QuestionType, string[]> = {
-      mcq: ['remembering', 'understanding', 'applying', 'analyzing', 'evaluating', 'creating'],
-      true_false: ['remembering', 'understanding'],
-      fill_blank: ['remembering', 'understanding', 'applying'],
-      essay: ['evaluating', 'creating', 'analyzing', 'applying']
-    };
     
     const priorityBlooms = bloomPriority[section.questionType];
     
@@ -291,6 +339,30 @@ function distributeCriteriaToSections(
     }
     
     assignments.set(section.id, sectionCriteria);
+  }
+  
+  // CRITICAL: Check for unassigned criteria items and distribute them to sections with capacity
+  const unassignedTotal = criteriaPool.reduce((sum, c) => sum + c.remaining, 0);
+  if (unassignedTotal > 0) {
+    console.warn(`⚠️ ${unassignedTotal} criteria items unassigned after initial distribution — redistributing`);
+    
+    // Find the largest section (usually MCQ) and add unassigned items there
+    const largestSection = sections.reduce((largest, s) => {
+      const sCount = s.endNumber - s.startNumber + 1;
+      const lCount = largest.endNumber - largest.startNumber + 1;
+      return sCount > lCount ? s : largest;
+    }, sections[0]);
+    
+    for (const criterion of criteriaPool) {
+      if (criterion.remaining <= 0) continue;
+      const existing = assignments.get(largestSection.id) || [];
+      existing.push({
+        ...criterion,
+        count: criterion.remaining
+      });
+      assignments.set(largestSection.id, existing);
+      criterion.remaining = 0;
+    }
   }
   
   return assignments;

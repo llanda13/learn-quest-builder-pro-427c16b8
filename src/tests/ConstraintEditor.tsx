@@ -3,6 +3,7 @@ import { Label } from "@/components/ui/label";
 import { Slider } from "@/components/ui/slider";
 import { Input } from "@/components/ui/input";
 import { Button } from "@/components/ui/button";
+import { generateUUID } from "@/utils/uuid";
 import { Plus, Trash2 } from "lucide-react";
 
 export interface Constraint {
@@ -27,7 +28,7 @@ export function ConstraintEditor({
 }: ConstraintEditorProps) {
   const addConstraint = (type: Constraint['type']) => {
     const newConstraint: Constraint = {
-      id: crypto.randomUUID(),
+      id: generateUUID(),
       type,
       target: type.startsWith('topic') ? topics[0] || '' : bloomLevels[0] || '',
       value: type.includes('min') ? 1 : type.includes('max') ? 10 : 50
@@ -61,6 +62,7 @@ export function ConstraintEditor({
                 value={constraint.target}
                 onChange={(e) => updateConstraint(constraint.id, { target: e.target.value })}
                 className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm"
+                aria-label={`Select topic for ${constraint.type === 'topic_min' ? 'minimum' : 'maximum'} constraint`}
               >
                 {topics.map(topic => (
                   <option key={topic} value={topic}>{topic}</option>
@@ -116,6 +118,7 @@ export function ConstraintEditor({
                 value={constraint.target}
                 onChange={(e) => updateConstraint(constraint.id, { target: e.target.value })}
                 className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm"
+                aria-label="Select Bloom's taxonomy level for requirement constraint"
               >
                 {bloomLevels.map(level => (
                   <option key={level} value={level}>{level}</option>
