@@ -7,13 +7,14 @@ import {
   FileText, 
   Sparkles, 
   Clock,
-  BarChart3,
+  
   Settings,
   LogOut,
   ChevronLeft,
   ChevronRight,
   User,
   BookOpen,
+  Database,
   Menu,
   X,
   Brain
@@ -43,6 +44,12 @@ const teacherMenuItems = [
     description: "View generated tests" 
   },
   { 
+    title: "Question Bank", 
+    href: "/teacher/question-bank", 
+    icon: Database,
+    description: "Browse questions" 
+  },
+  { 
     title: "TOS History", 
     href: "/teacher/tos-history", 
     icon: Clock,
@@ -53,12 +60,6 @@ const teacherMenuItems = [
     href: "/teacher/ai-assistant", 
     icon: Brain,
     description: "Academic AI helper" 
-  },
-  { 
-    title: "Reports", 
-    href: "/teacher/reports", 
-    icon: BarChart3,
-    description: "Usage statistics" 
   },
 ];
 
