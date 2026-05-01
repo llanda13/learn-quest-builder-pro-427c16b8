@@ -8,6 +8,7 @@ import { Switch } from '@/components/ui/switch';
 import { ArrowLeft, Shuffle, Download, Eye, FileText } from 'lucide-react';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
+import { generateUUID } from '@/utils/uuid';
 import { generateMultipleVersions, validateVersionBalance } from '@/services/testGeneration/multiVersionGenerator';
 import TestDistribution from '@/components/testGeneration/TestDistribution';
 import type { Json } from '@/integrations/supabase/types';
@@ -79,7 +80,7 @@ export default function MultiVersionTestGenerator({ onBack }: MultiVersionTestGe
       setBalanceMetrics(balance);
 
       const savedVersionIds: string[] = [];
-      const firstVersionId = crypto.randomUUID();
+      const firstVersionId = generateUUID();
       
       for (const version of generatedVersions) {
         const { data, error: insertError } = await supabase
