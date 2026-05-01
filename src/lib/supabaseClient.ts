@@ -96,7 +96,7 @@ export async function updateQuestion(id: string, updates: Partial<Question>): Pr
 export async function deleteQuestion(id: string): Promise<void> {
   const { error } = await supabase
     .from('questions')
-    .delete()
+    .update({ deleted: true, updated_at: new Date().toISOString() } as any)
     .eq('id', id);
 
   if (error) throw error;
@@ -108,7 +108,7 @@ export async function getQuestions(filters?: {
   difficulty?: string;
   approved?: boolean;
 }): Promise<Question[]> {
-  let query = supabase.from('questions').select('*');
+  let query = supabase.from('questions').select('*').eq('deleted', false);
 
   if (filters?.topic) {
     query = query.eq('topic', filters.topic);

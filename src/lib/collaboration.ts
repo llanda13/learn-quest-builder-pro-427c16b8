@@ -1,5 +1,6 @@
 import React from 'react';
 import { supabase } from '@/integrations/supabase/client';
+import { generateUUID } from '@/utils/uuid';
 import { RealtimeChannel } from '@supabase/supabase-js';
 
 export interface CollaborationUser {
@@ -65,7 +66,7 @@ export class CollaborativeEditor {
     try {
       // Generate current user
       this.currentUser = {
-        id: crypto.randomUUID(),
+        id: generateUUID(),
         name: userData.name,
         email: userData.email,
         color: USER_COLORS[Math.floor(Math.random() * USER_COLORS.length)],

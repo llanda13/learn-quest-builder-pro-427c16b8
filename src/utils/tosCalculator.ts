@@ -13,6 +13,8 @@
  * - Sum of all matrix cells === Total items
  */
 
+import { generateUUID } from './uuid';
+
 // Bloom's Taxonomy distribution (must sum to 1.0)
 export const BLOOM_DISTRIBUTION = {
   remembering: 0.15,   // 15% - Easy
@@ -296,7 +298,7 @@ export function calculateCanonicalTOSMatrix(input: TOSInput): CanonicalTOSMatrix
   });
   
   return {
-    id: crypto.randomUUID(),
+    id: generateUUID(),
     title: `${input.course} - ${input.exam_period}`,
     subject_no: input.subject_no,
     course: input.course,

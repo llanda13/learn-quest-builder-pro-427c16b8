@@ -58,11 +58,11 @@ export function ExamPrintView({ test, showAnswerKey = true }: ExamPrintViewProps
       if (user) {
         const { data } = await supabase
           .from('profiles')
-          .select('institution')
+          .select('college')
           .eq('id', user.id)
           .single();
-        if (data?.institution) {
-          setInstitution(data.institution);
+        if (data?.college) {
+          setInstitution(data.college);
         }
       }
     };

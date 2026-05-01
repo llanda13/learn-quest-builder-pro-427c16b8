@@ -25,7 +25,7 @@ import GeneratedTestPage from "./pages/teacher/GeneratedTestPage";
 import TeacherHistory from "./pages/teacher/History";
 import TOSHistory from "./pages/teacher/TOSHistory";
 import TOSViewPage from "./pages/teacher/TOSViewPage";
-import TeacherReports from "./pages/teacher/Reports";
+
 import TeacherSettings from "./pages/teacher/Settings";
 import ProfessionalExport from "./pages/ProfessionalExport";
 import AIAssistant from "./pages/AIAssistant";
@@ -36,10 +36,22 @@ import TestAssembly from "./pages/TestAssembly";
 import { ProtectedRoute } from "./components/ProtectedRoute";
 import { AdminLayout } from "./components/layout/AdminLayout";
 import { TeacherLayout } from "./components/layout/TeacherLayout";
-import QuestionBankView from "./pages/teacher/QuestionBankView";
 import NotFound from "./pages/NotFound";
 
-const queryClient = new QueryClient();
+// Configure React Query so switching tabs / blurring the window does NOT
+// trigger refetches. This preserves in-memory state (form inputs, AI
+// conversations, in-flight generations) when users briefly leave the app.
+// Background data still refreshes on explicit invalidation or remount.
+const queryClient = new QueryClient({
+  defaultOptions: {
+    queries: {
+      refetchOnWindowFocus: false,
+      refetchOnReconnect: false,
+      retry: 1,
+      staleTime: 60_000,
+    },
+  },
+});
 
 const App = () => {
   // Initialize automated metrics collection
@@ -104,11 +116,11 @@ const App = () => {
                         <Route path="tos-history" element={<TOSHistory />} />
                         <Route path="tos-view/:tosId" element={<TOSViewPage />} />
                         <Route path="tos/:tosId" element={<TOSPage />} />
-                        <Route path="reports" element={<TeacherReports />} />
+                        
                         <Route path="export" element={<ProfessionalExport />} />
                         <Route path="tests" element={<Tests />} />
                         <Route path="collaboration" element={<Collaboration />} />
-                        <Route path="question-bank" element={<QuestionBankView />} />
+                        <Route path="question-bank" element={<QuestionBankManager />} />
                         <Route path="settings" element={<TeacherSettings />} />
                       </Routes>
                     </TeacherLayout>
