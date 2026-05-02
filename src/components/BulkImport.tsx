@@ -1063,14 +1063,22 @@ export default function BulkImport({
 
       setResults(stats);
       setImportStep('results');
-      toast.success(`Successfully imported ${deduplicatedForSave.length} questions!`);
+      setHasImported(true);
+      toast.success(`Successfully imported ${deduplicatedForSave.length} question${deduplicatedForSave.length === 1 ? '' : 's'} to the Question Bank!`);
       clearDraftKeys();
+      // Clear file/preview/verification so the module can't be re-submitted with stale data
+      setFile(null);
+      setPreviewData([]);
+      setVerificationData([]);
+      setClassificationResults([]);
       onImportComplete();
     } catch (error) {
       console.error('Import error:', error);
       toast.error(`Import failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
       setErrors([error instanceof Error ? error.message : 'Unknown error occurred']);
       setImportStep('verification');
+      // Release the lock so the user can retry after a failure
+      importLockRef.current = false;
     } finally {
       setIsProcessing(false);
     }
