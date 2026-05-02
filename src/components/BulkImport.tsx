@@ -1595,22 +1595,36 @@ export default function BulkImport({
             <Button
               onClick={saveVerifiedQuestions}
               className="flex-1"
-              disabled={unresolvedCount > 0}
-              title={unresolvedCount > 0 ? `Fix ${unresolvedCount} unresolved row(s) before saving` : undefined}
+              disabled={unresolvedCount > 0 || hasImported || isProcessing}
+              title={
+                hasImported
+                  ? 'Questions already imported. Reset to start a new import.'
+                  : unresolvedCount > 0
+                    ? `Fix ${unresolvedCount} unresolved row(s) before saving`
+                    : undefined
+              }
             >
               <Save className="h-4 w-4 mr-2" />
-              {unresolvedCount > 0
-                ? `Fix ${unresolvedCount} unresolved row${unresolvedCount === 1 ? '' : 's'} to save`
-                : `Save ${verificationData.length} Questions to Question Bank`}
+              {hasImported
+                ? 'Already imported'
+                : unresolvedCount > 0
+                  ? `Fix ${unresolvedCount} unresolved row${unresolvedCount === 1 ? '' : 's'} to save`
+                  : `Save ${verificationData.length} Questions to Question Bank`}
             </Button>
           </>
         )}
 
         {importStep === 'results' && (
-          <Button onClick={onClose} className="flex-1">
-            <CheckCircle className="h-4 w-4 mr-2" />
-            Complete
-          </Button>
+          <>
+            <Button variant="outline" onClick={resetAll} className="flex-1">
+              <Upload className="h-4 w-4 mr-2" />
+              Import More
+            </Button>
+            <Button onClick={() => { resetAll(); onClose(); }} className="flex-1">
+              <CheckCircle className="h-4 w-4 mr-2" />
+              Go to Question Bank
+            </Button>
+          </>
         )}
       </div>
     </div>
