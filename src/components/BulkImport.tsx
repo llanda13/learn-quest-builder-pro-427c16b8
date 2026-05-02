@@ -968,6 +968,12 @@ export default function BulkImport({
 
   /** Step 2: After admin verifies, save to database */
   const saveVerifiedQuestions = async () => {
+    // Idempotency / duplicate-submit guard
+    if (importLockRef.current || hasImported || isProcessing) {
+      toast.info('Import already in progress or completed.');
+      return;
+    }
+    importLockRef.current = true;
     setIsProcessing(true);
     setProgress(0);
     setCurrentStep('Saving to database...');
