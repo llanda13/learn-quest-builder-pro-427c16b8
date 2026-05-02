@@ -150,6 +150,8 @@ export function QuestionBankForm({ onSuccess }: QuestionBankFormProps) {
 
       form.reset();
       setChoices(["", "", "", ""]);
+      clearDraft();
+      clearPersistedState(DRAFT_KEY);
       onSuccess();
     } catch (error) {
       console.error('Error saving question:', error)
