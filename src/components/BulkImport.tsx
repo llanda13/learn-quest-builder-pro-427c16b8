@@ -107,6 +107,28 @@ export default function BulkImport({
   const [importStep, setImportStep] = useState<ImportStep>(() => readJSON<ImportStep>(BI_KEYS.step, 'upload'));
   const [verificationData, setVerificationData] = useState<ParsedQuestion[]>(() => readJSON<ParsedQuestion[]>(BI_KEYS.verification, []));
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  // Lock to prevent duplicate submissions and to disable Save after a successful import
+  const [hasImported, setHasImported] = useState(false);
+  const importLockRef = React.useRef(false);
+
+  // Full reset to initial state (clears file, preview, verification, classification, errors, drafts)
+  const resetAll = useCallback(() => {
+    setFile(null);
+    setPreviewData([]);
+    setShowPreview(false);
+    setVerificationData([]);
+    setClassificationResults([]);
+    setShowClassificationDetails(false);
+    setResults(null);
+    setErrors([]);
+    setProgress(0);
+    setCurrentStep('');
+    setEditingIndex(null);
+    setImportStep('upload');
+    setHasImported(false);
+    importLockRef.current = false;
+    clearDraftKeys();
+  }, []);
 
   // Existing topics from Question Bank for auto-assignment
   const [existingTopics, setExistingTopics] = useState<string[]>([]);
@@ -946,6 +968,12 @@ export default function BulkImport({
 
   /** Step 2: After admin verifies, save to database */
   const saveVerifiedQuestions = async () => {
+    // Idempotency / duplicate-submit guard
+    if (importLockRef.current || hasImported || isProcessing) {
+      toast.info('Import already in progress or completed.');
+      return;
+    }
+    importLockRef.current = true;
     setIsProcessing(true);
     setProgress(0);
     setCurrentStep('Saving to database...');
@@ -1035,14 +1063,22 @@ export default function BulkImport({
 
       setResults(stats);
       setImportStep('results');
-      toast.success(`Successfully imported ${deduplicatedForSave.length} questions!`);
+      setHasImported(true);
+      toast.success(`Successfully imported ${deduplicatedForSave.length} question${deduplicatedForSave.length === 1 ? '' : 's'} to the Question Bank!`);
       clearDraftKeys();
+      // Clear file/preview/verification so the module can't be re-submitted with stale data
+      setFile(null);
+      setPreviewData([]);
+      setVerificationData([]);
+      setClassificationResults([]);
       onImportComplete();
     } catch (error) {
       console.error('Import error:', error);
       toast.error(`Import failed: ${error instanceof Error ? error.message : 'Unknown error'}`);
       setErrors([error instanceof Error ? error.message : 'Unknown error occurred']);
       setImportStep('verification');
+      // Release the lock so the user can retry after a failure
+      importLockRef.current = false;
     } finally {
       setIsProcessing(false);
     }
@@ -1559,22 +1595,36 @@ export default function BulkImport({
             <Button
               onClick={saveVerifiedQuestions}
               className="flex-1"
-              disabled={unresolvedCount > 0}
-              title={unresolvedCount > 0 ? `Fix ${unresolvedCount} unresolved row(s) before saving` : undefined}
+              disabled={unresolvedCount > 0 || hasImported || isProcessing}
+              title={
+                hasImported
+                  ? 'Questions already imported. Reset to start a new import.'
+                  : unresolvedCount > 0
+                    ? `Fix ${unresolvedCount} unresolved row(s) before saving`
+                    : undefined
+              }
             >
               <Save className="h-4 w-4 mr-2" />
-              {unresolvedCount > 0
-                ? `Fix ${unresolvedCount} unresolved row${unresolvedCount === 1 ? '' : 's'} to save`
-                : `Save ${verificationData.length} Questions to Question Bank`}
+              {hasImported
+                ? 'Already imported'
+                : unresolvedCount > 0
+                  ? `Fix ${unresolvedCount} unresolved row${unresolvedCount === 1 ? '' : 's'} to save`
+                  : `Save ${verificationData.length} Questions to Question Bank`}
             </Button>
           </>
         )}
 
         {importStep === 'results' && (
-          <Button onClick={onClose} className="flex-1">
-            <CheckCircle className="h-4 w-4 mr-2" />
-            Complete
-          </Button>
+          <>
+            <Button variant="outline" onClick={resetAll} className="flex-1">
+              <Upload className="h-4 w-4 mr-2" />
+              Import More
+            </Button>
+            <Button onClick={() => { resetAll(); onClose(); }} className="flex-1">
+              <CheckCircle className="h-4 w-4 mr-2" />
+              Go to Question Bank
+            </Button>
+          </>
         )}
       </div>
     </div>

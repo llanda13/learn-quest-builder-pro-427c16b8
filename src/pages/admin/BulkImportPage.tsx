@@ -1,8 +1,15 @@
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import BulkImport from '@/components/BulkImport';
 import { Upload } from 'lucide-react';
+import { useNavigate } from 'react-router-dom';
 
 export default function BulkImportPage() {
+  const navigate = useNavigate();
+
+  const goToQuestionBank = () => {
+    navigate('/admin/question-bank');
+  };
+
   return (
     <div className="container mx-auto py-8 px-4">
       <Card>
@@ -13,9 +20,9 @@ export default function BulkImportPage() {
           </CardTitle>
         </CardHeader>
         <CardContent>
-          <BulkImport 
-            onClose={() => {}} 
-            onImportComplete={() => {}}
+          <BulkImport
+            onClose={goToQuestionBank}
+            onImportComplete={goToQuestionBank}
           />
         </CardContent>
       </Card>
