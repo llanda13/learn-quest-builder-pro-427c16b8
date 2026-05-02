@@ -55,13 +55,14 @@ const topics = [
   "Testing and Quality Assurance"
 ];
 
-export function QuestionBankForm({ onSuccess }: QuestionBankFormProps) {
-  const [choices, setChoices] = useState<string[]>(["", "", "", ""]);
-  const { toast } = useToast();
+const DRAFT_KEY = "questionbank-form.draft";
 
-  const form = useForm<QuestionFormData>({
-    resolver: zodResolver(questionSchema),
-    defaultValues: {
+export function QuestionBankForm({ onSuccess }: QuestionBankFormProps) {
+  const [draft, setDraft, clearDraft] = usePersistentState<{
+    values: Partial<QuestionFormData>;
+    choices: string[];
+  }>(DRAFT_KEY, {
+    values: {
       topic: "",
       text: "",
       type: "mcq",
@@ -70,7 +71,32 @@ export function QuestionBankForm({ onSuccess }: QuestionBankFormProps) {
       difficulty: "Easy",
       knowledge_dimension: "",
     },
+    choices: ["", "", "", ""],
   });
+
+  const [choices, setChoices] = useState<string[]>(draft.choices ?? ["", "", "", ""]);
+  const { toast } = useToast();
+
+  const form = useForm<QuestionFormData>({
+    resolver: zodResolver(questionSchema),
+    defaultValues: {
+      topic: draft.values.topic ?? "",
+      text: draft.values.text ?? "",
+      type: (draft.values.type as QuestionFormData["type"]) ?? "mcq",
+      correct_answer: draft.values.correct_answer ?? "",
+      bloom_level: draft.values.bloom_level ?? "",
+      difficulty: draft.values.difficulty ?? "Easy",
+      knowledge_dimension: draft.values.knowledge_dimension ?? "",
+    },
+  });
+
+  // Persist every field change so a tab switch / refresh never wipes input.
+  useEffect(() => {
+    const sub = form.watch((values) => {
+      setDraft({ values: values as Partial<QuestionFormData>, choices });
+    });
+    return () => sub.unsubscribe();
+  }, [form, choices, setDraft]);
 
   const questionType = form.watch("type");
 
