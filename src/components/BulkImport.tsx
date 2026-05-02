@@ -107,6 +107,28 @@ export default function BulkImport({
   const [importStep, setImportStep] = useState<ImportStep>(() => readJSON<ImportStep>(BI_KEYS.step, 'upload'));
   const [verificationData, setVerificationData] = useState<ParsedQuestion[]>(() => readJSON<ParsedQuestion[]>(BI_KEYS.verification, []));
   const [editingIndex, setEditingIndex] = useState<number | null>(null);
+  // Lock to prevent duplicate submissions and to disable Save after a successful import
+  const [hasImported, setHasImported] = useState(false);
+  const importLockRef = React.useRef(false);
+
+  // Full reset to initial state (clears file, preview, verification, classification, errors, drafts)
+  const resetAll = useCallback(() => {
+    setFile(null);
+    setPreviewData([]);
+    setShowPreview(false);
+    setVerificationData([]);
+    setClassificationResults([]);
+    setShowClassificationDetails(false);
+    setResults(null);
+    setErrors([]);
+    setProgress(0);
+    setCurrentStep('');
+    setEditingIndex(null);
+    setImportStep('upload');
+    setHasImported(false);
+    importLockRef.current = false;
+    clearDraftKeys();
+  }, []);
 
   // Existing topics from Question Bank for auto-assignment
   const [existingTopics, setExistingTopics] = useState<string[]>([]);
