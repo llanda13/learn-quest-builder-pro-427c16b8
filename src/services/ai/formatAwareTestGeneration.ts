@@ -614,16 +614,15 @@ async function generateTypedQuestions(
   uniquenessStore: QuestionUniquenessStore,
   allQuestionTexts: string[]
 ): Promise<any[]> {
-  const MAX_RETRIES = 2;
   let attempt = 0;
   const accepted: any[] = [];
 
-  while (accepted.length < count && attempt <= MAX_RETRIES) {
+  while (accepted.length < count && attempt < MAX_AI_GENERATION_RETRIES) {
     attempt++;
     const needed = count - accepted.length;
 
     try {
-      const aiQuestions = await generateTypedQuestionsViaAI(questionType, criteria, needed, userId);
+      const aiQuestions = await generateTypedQuestionsViaAI(questionType, criteria, Math.min(needed, AI_GENERATION_BATCH_SIZE), userId);
 
       for (const q of aiQuestions) {
         if (accepted.length >= count) break;
@@ -660,7 +659,7 @@ async function generateTypedQuestions(
       console.log(`   ⚠️ After AI attempt ${attempt}: ${accepted.length}/${count} unique questions accepted`);
     } catch (error) {
       console.error(`   ❌ AI generation attempt ${attempt} failed:`, error);
-      break; // Don't retry on hard errors
+      console.warn(`   🔁 Continuing generation retries after failure (${attempt}/${MAX_AI_GENERATION_RETRIES})`);
     }
   }
 
