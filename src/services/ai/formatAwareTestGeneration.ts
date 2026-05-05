@@ -138,8 +138,7 @@ export async function generateFormatAwareTest(
 
     // COMPLETION GATE: Retry if section is short
     let retryAttempt = 0;
-    const MAX_SECTION_RETRIES = 2;
-    while (sectionQuestions.length < actualQuestionCount && retryAttempt < MAX_SECTION_RETRIES) {
+    while (sectionQuestions.length < actualQuestionCount && retryAttempt < MAX_SECTION_COMPLETION_RETRIES) {
       retryAttempt++;
       const shortfall = actualQuestionCount - sectionQuestions.length;
       console.log(`   🔄 Section ${section.label} retry ${retryAttempt}: need ${shortfall} more ${section.questionType} questions`);
@@ -154,6 +153,9 @@ export async function generateFormatAwareTest(
         allQuestionTexts
       );
       sectionQuestions = [...sectionQuestions, ...repairQuestions];
+      if (repairQuestions.length === 0) {
+        console.warn(`   ⚠️ Section ${section.label} retry ${retryAttempt} produced no accepted questions; continuing until retry limit`);
+      }
     }
 
     // Trim to exact count
