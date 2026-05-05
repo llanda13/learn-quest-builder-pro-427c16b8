@@ -1945,10 +1945,10 @@ serve(async (req) => {
           continue;
         }
         if (!filledSlot || !filledSlot.filled) {
-          unfilledSlots.push(slot);
+          unfilledSlots.push({ ...slot, filled: false, question: undefined, source: undefined });
         } else if (!usedSlotIds.has(slot.id) && !usedSlotIds.has(filledSlot.question?.id)) {
           // This slot had a question but it was rejected during validation
-          unfilledSlots.push(slot);
+          unfilledSlots.push({ ...slot, filled: false, question: undefined, source: undefined });
         }
       }
       
@@ -2028,10 +2028,9 @@ serve(async (req) => {
       console.log(`   ✅ Repair attempt ${completionAttempts}: added ${repairAccepted} questions`);
       console.log(`   📊 New total: ${normalizedQuestions.length}/${requiredTotal}`);
       
-      // If no progress was made, break to avoid infinite loop
+      // If no progress was made, keep retrying up to the configured limit so transient AI/validation misses don't end generation early
       if (repairAccepted === 0) {
-        console.warn(`   ⚠️ No progress made in repair attempt, breaking`);
-        break;
+        console.warn(`   ⚠️ No progress made in repair attempt; continuing retries until limit is reached`);
       }
     }
     
