@@ -85,7 +85,6 @@ interface GenerationRegistry {
 
 // ============= CONSTANTS =============
 
-const AI_BATCH_SIZE = 4;
 const MAX_SLOT_RETRY_ATTEMPTS = 6;
 const MAX_COMPLETION_ATTEMPTS = 8;
 const SEMANTIC_REJECTION_THRESHOLD = 0.88;
