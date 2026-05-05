@@ -401,7 +401,7 @@ function computeTextSimilarity(text1: string, text2: string): number {
 function isDuplicateByText(
   questionText: string,
   existingTexts: string[],
-  threshold: number = 0.7
+  threshold: number = DUPLICATE_SIMILARITY_THRESHOLD
 ): boolean {
   for (const existing of existingTexts) {
     if (computeTextSimilarity(questionText, existing) >= threshold) {
