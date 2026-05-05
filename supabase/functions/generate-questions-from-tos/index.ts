@@ -2135,7 +2135,7 @@ serve(async (req) => {
           topic: s.topic,
           bloom: s.bloomLevel,
           difficulty: s.difficulty,
-          question_type: s.questionType,
+          question_type: String(s.questionType),
           points: s.points,
           filled: filled?.filled ?? false,
           source: filled?.source || 'unfilled'
