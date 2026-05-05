@@ -17,6 +17,11 @@ import { QuestionUniquenessStore, createQuestionFingerprint, extractConcept } fr
 import type { AnswerType, KnowledgeDimension } from "@/types/knowledge";
 import { resolveSubjectMetadata } from "./subjectMetadataResolver";
 
+const AI_GENERATION_BATCH_SIZE = 3;
+const MAX_AI_GENERATION_RETRIES = 6;
+const MAX_SECTION_COMPLETION_RETRIES = 8;
+const DUPLICATE_SIMILARITY_THRESHOLD = 0.88;
+
 export interface FormatAwareTestConfig {
   format: ExamFormat;
   tosCriteria: TOSCriteria[];
