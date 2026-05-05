@@ -1876,6 +1876,7 @@ serve(async (req) => {
         if (!choices || typeof choices !== 'object') {
           console.warn(`   ❌ MCQ missing choices object, skipping`);
           rejectedQuestions.push({ ...q, rejection_reason: 'Missing choices object' });
+          registry.failureLog.push({ phase: 'normalization_validation', topic: q.topic, bloomLevel: q.bloom_level, questionType: q.question_type, reason: 'Missing choices object' });
           continue;
         }
         
@@ -1886,6 +1887,7 @@ serve(async (req) => {
         if (!hasAllOptions) {
           console.warn(`   ❌ MCQ missing required options A-D, skipping`);
           rejectedQuestions.push({ ...q, rejection_reason: 'Missing or empty options A-D' });
+          registry.failureLog.push({ phase: 'normalization_validation', topic: q.topic, bloomLevel: q.bloom_level, questionType: q.question_type, reason: 'Missing or empty options A-D' });
           continue;
         }
         
@@ -1911,6 +1913,7 @@ serve(async (req) => {
         if (hasPlaceholder) {
           console.warn(`   ❌ MCQ contains placeholder content, skipping`);
           rejectedQuestions.push({ ...q, rejection_reason: 'Contains placeholder content' });
+          registry.failureLog.push({ phase: 'normalization_validation', topic: q.topic, bloomLevel: q.bloom_level, questionType: q.question_type, reason: 'Contains placeholder content' });
           continue;
         }
       }
