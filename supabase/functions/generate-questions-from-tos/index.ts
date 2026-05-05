@@ -2095,6 +2095,8 @@ serve(async (req) => {
       ai_generated: aiFilled.filter(s => s.filled).length,
       unfilled: allSlots.length - filledById.size,
       rejected_redundant: rejectedQuestions.length,
+      failure_reasons: registry.failureLog,
+      completion_attempts: completionAttempts,
       normalization_applied: true,
       semantic_validation: true,
       by_question_type: typeCounts,
@@ -2131,7 +2133,18 @@ serve(async (req) => {
           filled: filled?.filled ?? false,
           source: filled?.source || 'unfilled'
         };
-      }),
+      }).concat(registry.failureLog.map((failure, index) => ({
+        slot_id: failure.slotId || `failure_${index + 1}`,
+        topic: failure.topic || 'unknown',
+        bloom: failure.bloomLevel || 'unknown',
+        difficulty: 'unknown',
+        question_type: failure.questionType || 'unknown',
+        points: 0,
+        filled: false,
+        source: failure.phase,
+        reason: failure.reason,
+        attempt: failure.attempt
+      }))),
       statistics: stats,
       tos_id: body.tos_id
     }), {
