@@ -645,12 +645,17 @@ async function generateTypedQuestions(
         );
         const uniqueCheck = uniquenessStore.checkWithSuggestions(fp);
         if (!uniqueCheck.unique) {
-          console.log(`   🔄 Rejected structurally redundant AI question: ${uniqueCheck.reason}`);
-          continue;
+          console.warn(`   ⚠️ Structurally similar AI question accepted with review flag: ${uniqueCheck.reason}`);
+          q.needs_review = true;
+          q.metadata = {
+            ...(q.metadata || {}),
+            validation_warning: uniqueCheck.reason
+          };
+        } else {
+          uniquenessStore.register(fp);
         }
 
         // Passed all checks — accept
-        uniquenessStore.register(fp);
         allQuestionTexts.push(qText);
         accepted.push(q);
       }
