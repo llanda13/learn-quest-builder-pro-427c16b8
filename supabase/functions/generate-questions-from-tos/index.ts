@@ -818,6 +818,7 @@ async function fillSlotsWithAI(
         const validation = validateQuestionDetailed(question, slot.questionType);
 
         if (question && validation.valid) {
+          question.slot_id = slot.id;
           markConceptUsed(registry, slot.topic, concept);
           markOperationUsed(registry, slot.topic, slot.bloomLevel, operation);
           markPairUsed(registry, concept, operation);
@@ -1821,6 +1822,7 @@ serve(async (req) => {
       const filledSlot = filledById.get(slot.id);
       if (filledSlot && filledSlot.question) {
         filledSlot.question.points = filledSlot.points;
+        filledSlot.question.slot_id = slot.id;
         rawQuestions.push(filledSlot.question);
       }
     }
