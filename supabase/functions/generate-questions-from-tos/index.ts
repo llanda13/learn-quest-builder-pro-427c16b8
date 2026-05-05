@@ -806,6 +806,10 @@ async function fillSlotsWithAI(
         points: slot.points
       };
 
+      markConceptUsed(registry, slot.topic, concept);
+      markOperationUsed(registry, slot.topic, slot.bloomLevel, operation);
+      markPairUsed(registry, concept, operation);
+
       try {
         const questions = await generateQuestionsWithIntents(
           slot.topic,
@@ -819,9 +823,6 @@ async function fillSlotsWithAI(
 
         if (question && validation.valid) {
           question.slot_id = slot.id;
-          markConceptUsed(registry, slot.topic, concept);
-          markOperationUsed(registry, slot.topic, slot.bloomLevel, operation);
-          markPairUsed(registry, concept, operation);
           registerQuestion(registry, slot.topic, slot.bloomLevel, question);
           slot.filled = true;
           slot.question = question;
