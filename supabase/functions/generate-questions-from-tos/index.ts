@@ -1850,13 +1850,20 @@ serve(async (req) => {
       }
       
       // VALIDATE: Check semantic similarity against already-accepted questions
-      const similarityCheck = checkSemanticRedundancy(normalizedText, acceptedTexts, 0.70);
+      const similarityCheck = checkSemanticRedundancy(normalizedText, acceptedTexts, SEMANTIC_REJECTION_THRESHOLD);
       if (similarityCheck.isRedundant) {
         console.warn(`   🔁 Redundant question detected (${(similarityCheck.similarity! * 100).toFixed(0)}% similar): "${normalizedText.substring(0, 50)}..."`);
         rejectedQuestions.push({
           ...q,
           rejection_reason: `Semantically similar to existing question (${(similarityCheck.similarity! * 100).toFixed(0)}% match)`,
           similar_to: similarityCheck.mostSimilar
+        });
+        registry.failureLog.push({
+          phase: 'normalization_validation',
+          topic: q.topic,
+          bloomLevel: q.bloom_level,
+          questionType: q.question_type,
+          reason: `Rejected as semantically similar (${(similarityCheck.similarity! * 100).toFixed(0)}% match)`
         });
         continue; // Skip this question
       }
@@ -1918,7 +1925,6 @@ serve(async (req) => {
     // ============= STEP 4: COMPLETION GATE - ENFORCE EXACT TOS COUNT =============
     const requiredTotal = body.total_items;
     let completionAttempts = 0;
-    const MAX_COMPLETION_ATTEMPTS = 3;
     
     while (normalizedQuestions.length < requiredTotal && completionAttempts < MAX_COMPLETION_ATTEMPTS) {
       completionAttempts++;
