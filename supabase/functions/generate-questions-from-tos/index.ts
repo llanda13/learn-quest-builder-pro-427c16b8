@@ -2024,6 +2024,7 @@ serve(async (req) => {
         
         q.question_text = normalizedText;
         q.metadata = { ...(q.metadata || {}), repair_attempt: completionAttempts };
+        filledById.set(slot.id, slot);
         normalizedQuestions.push(q);
         acceptedTexts.push(normalizedText.toLowerCase());
         repairAccepted++;
