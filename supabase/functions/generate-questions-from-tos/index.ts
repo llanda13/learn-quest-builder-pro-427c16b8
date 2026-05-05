@@ -72,9 +72,23 @@ interface GenerationRegistry {
   usedOperations: Record<string, string[]>;
   usedPairs: string[];
   usedQuestionTexts: string[];
+  failureLog: Array<{
+    phase: string;
+    slotId?: string;
+    topic?: string;
+    bloomLevel?: string;
+    questionType?: string;
+    attempt?: number;
+    reason: string;
+  }>;
 }
 
 // ============= CONSTANTS =============
+
+const AI_BATCH_SIZE = 4;
+const MAX_SLOT_RETRY_ATTEMPTS = 6;
+const MAX_COMPLETION_ATTEMPTS = 8;
+const SEMANTIC_REJECTION_THRESHOLD = 0.88;
 
 /**
  * Extract JSON from AI response that may be wrapped in markdown code blocks
