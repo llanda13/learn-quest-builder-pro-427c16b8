@@ -1983,9 +1983,19 @@ serve(async (req) => {
         const normalizedText = normalizeQuestionText(q.question_text || '');
         
         // Check for redundancy against existing accepted questions
-        const similarityCheck = checkSemanticRedundancy(normalizedText, acceptedTexts, 0.70);
+        const similarityCheck = checkSemanticRedundancy(normalizedText, acceptedTexts, SEMANTIC_REJECTION_THRESHOLD);
         if (similarityCheck.isRedundant) {
-          console.log(`   🔁 Repair question redundant, skipping`);
+          const reason = `Repair question redundant (${((similarityCheck.similarity || 0) * 100).toFixed(0)}% match)`;
+          console.log(`   🔁 ${reason}, retrying another slot`);
+          registry.failureLog.push({
+            phase: 'completion_gate',
+            slotId: slot.id,
+            topic: q.topic,
+            bloomLevel: q.bloom_level,
+            questionType: q.question_type,
+            attempt: completionAttempts,
+            reason
+          });
           continue;
         }
         
