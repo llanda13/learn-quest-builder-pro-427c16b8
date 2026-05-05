@@ -781,90 +781,82 @@ async function fillSlotsWithAI(
     return slots.map(s => ({ ...s, filled: false }));
   }
 
-  // Group by topic+bloom+questionType for batch generation
-  const slotGroups = new Map<string, Slot[]>();
-  for (const slot of slots) {
-    const key = `${slot.topic}::${slot.bloomLevel}::${slot.questionType}`;
-    if (!slotGroups.has(key)) {
-      slotGroups.set(key, []);
-    }
-    slotGroups.get(key)!.push(slot);
-  }
-
   const filledSlots: Slot[] = [];
 
-  for (const [key, groupSlots] of slotGroups) {
-    const [topic, bloom, questionType] = key.split('::');
+  for (const slot of slots) {
+    if (slot.filled && slot.question) {
+      filledSlots.push(slot);
+      continue;
+    }
 
-    let pendingSlots = [...groupSlots];
     let attempt = 0;
 
-    while (pendingSlots.length > 0 && attempt < 3) {
+    while (!slot.filled && attempt < MAX_SLOT_RETRY_ATTEMPTS) {
       attempt++;
-
-      const intents = pendingSlots.map(slot => {
-        const concept = selectNextConcept(registry, topic);
-        const operation = selectNextOperation(registry, topic, bloom);
-        const answerType = selectAnswerType(bloom);
-
-        markConceptUsed(registry, topic, concept);
-        markOperationUsed(registry, topic, bloom, operation);
-        markPairUsed(registry, concept, operation);
-
-        return {
-          slot,
-          concept,
-          operation,
-          answerType,
-          difficulty: slot.difficulty,
-          knowledgeDimension: slot.knowledgeDimension,
-          questionType: slot.questionType,
-          points: slot.points
-        };
-      });
+      const concept = selectNextConcept(registry, slot.topic);
+      const operation = selectNextOperation(registry, slot.topic, slot.bloomLevel);
+      const answerType = selectAnswerType(slot.bloomLevel);
+      const intent = {
+        slot,
+        concept,
+        operation,
+        answerType,
+        difficulty: slot.difficulty,
+        knowledgeDimension: slot.knowledgeDimension,
+        questionType: slot.questionType,
+        points: slot.points
+      };
 
       try {
         const questions = await generateQuestionsWithIntents(
-          topic,
-          bloom,
-          intents,
+          slot.topic,
+          slot.bloomLevel,
+          [intent],
           aiApiKey,
           registry
         );
+        const question = questions[0];
+        const validation = validateQuestionDetailed(question, slot.questionType);
 
-        let filledThisAttempt = 0;
-
-        for (let i = 0; i < intents.length && i < questions.length; i++) {
-          const slot = intents[i].slot;
-          const question = questions[i];
-
-          if (question && validateQuestion(question, slot.questionType)) {
-            registerQuestion(registry, topic, bloom, question);
-            slot.filled = true;
-            slot.question = question;
-            slot.source = 'ai';
-            filledSlots.push(slot);
-            filledThisAttempt++;
-          }
+        if (question && validation.valid) {
+          markConceptUsed(registry, slot.topic, concept);
+          markOperationUsed(registry, slot.topic, slot.bloomLevel, operation);
+          markPairUsed(registry, concept, operation);
+          registerQuestion(registry, slot.topic, slot.bloomLevel, question);
+          slot.filled = true;
+          slot.question = question;
+          slot.source = 'ai';
+          filledSlots.push(slot);
+        } else {
+          const reason = validation.reason || 'AI returned no question';
+          console.warn(`🔁 Slot ${slot.id} retry ${attempt}/${MAX_SLOT_RETRY_ATTEMPTS}: ${reason}`);
+          registry.failureLog.push({
+            phase: 'ai_slot_generation',
+            slotId: slot.id,
+            topic: slot.topic,
+            bloomLevel: slot.bloomLevel,
+            questionType: slot.questionType,
+            attempt,
+            reason
+          });
         }
-
-        pendingSlots = pendingSlots.filter(s => !s.filled);
-
-        if (pendingSlots.length > 0) {
-          console.warn(`🔁 Retry ${attempt}/3: ${pendingSlots.length} slots still unfilled for ${key}`);
-        }
-
-        if (filledThisAttempt === 0) {
-          break;
-        }
-
       } catch (error) {
-        console.error(`AI generation attempt ${attempt} failed for ${key}:`, error);
+        const reason = error instanceof Error ? error.message : String(error);
+        console.error(`AI generation attempt ${attempt} failed for slot ${slot.id}:`, error);
+        registry.failureLog.push({
+          phase: 'ai_slot_generation',
+          slotId: slot.id,
+          topic: slot.topic,
+          bloomLevel: slot.bloomLevel,
+          questionType: slot.questionType,
+          attempt,
+          reason
+        });
       }
     }
 
-    if (pendingSlots.length > 0) {
-      console.warn(`⚠️ Could not fill ${pendingSlots.length} slots for ${key} after retries`);
+    if (!slot.filled) {
+      console.warn(`⚠️ Could not fill slot ${slot.id} after ${MAX_SLOT_RETRY_ATTEMPTS} retries`);
     }
   }
 
