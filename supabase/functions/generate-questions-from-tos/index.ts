@@ -72,9 +72,22 @@ interface GenerationRegistry {
   usedOperations: Record<string, string[]>;
   usedPairs: string[];
   usedQuestionTexts: string[];
+  failureLog: Array<{
+    phase: string;
+    slotId?: string;
+    topic?: string;
+    bloomLevel?: string;
+    questionType?: string;
+    attempt?: number;
+    reason: string;
+  }>;
 }
 
 // ============= CONSTANTS =============
+
+const MAX_SLOT_RETRY_ATTEMPTS = 6;
+const MAX_COMPLETION_ATTEMPTS = 8;
+const SEMANTIC_REJECTION_THRESHOLD = 0.88;
 
 /**
  * Extract JSON from AI response that may be wrapped in markdown code blocks
@@ -767,90 +780,84 @@ async function fillSlotsWithAI(
     return slots.map(s => ({ ...s, filled: false }));
   }
 
-  // Group by topic+bloom+questionType for batch generation
-  const slotGroups = new Map<string, Slot[]>();
-  for (const slot of slots) {
-    const key = `${slot.topic}::${slot.bloomLevel}::${slot.questionType}`;
-    if (!slotGroups.has(key)) {
-      slotGroups.set(key, []);
-    }
-    slotGroups.get(key)!.push(slot);
-  }
-
   const filledSlots: Slot[] = [];
 
-  for (const [key, groupSlots] of slotGroups) {
-    const [topic, bloom, questionType] = key.split('::');
+  for (const slot of slots) {
+    if (slot.filled && slot.question) {
+      filledSlots.push(slot);
+      continue;
+    }
 
-    let pendingSlots = [...groupSlots];
     let attempt = 0;
 
-    while (pendingSlots.length > 0 && attempt < 3) {
+    while (!slot.filled && attempt < MAX_SLOT_RETRY_ATTEMPTS) {
       attempt++;
+      const concept = selectNextConcept(registry, slot.topic);
+      const operation = selectNextOperation(registry, slot.topic, slot.bloomLevel);
+      const answerType = selectAnswerType(slot.bloomLevel);
+      const intent = {
+        slot,
+        concept,
+        operation,
+        answerType,
+        difficulty: slot.difficulty,
+        knowledgeDimension: slot.knowledgeDimension,
+        questionType: slot.questionType,
+        points: slot.points
+      };
 
-      const intents = pendingSlots.map(slot => {
-        const concept = selectNextConcept(registry, topic);
-        const operation = selectNextOperation(registry, topic, bloom);
-        const answerType = selectAnswerType(bloom);
-
-        markConceptUsed(registry, topic, concept);
-        markOperationUsed(registry, topic, bloom, operation);
-        markPairUsed(registry, concept, operation);
-
-        return {
-          slot,
-          concept,
-          operation,
-          answerType,
-          difficulty: slot.difficulty,
-          knowledgeDimension: slot.knowledgeDimension,
-          questionType: slot.questionType,
-          points: slot.points
-        };
-      });
+      markConceptUsed(registry, slot.topic, concept);
+      markOperationUsed(registry, slot.topic, slot.bloomLevel, operation);
+      markPairUsed(registry, concept, operation);
 
       try {
         const questions = await generateQuestionsWithIntents(
-          topic,
-          bloom,
-          intents,
+          slot.topic,
+          slot.bloomLevel,
+          [intent],
           aiApiKey,
           registry
         );
+        const question = questions[0];
+        const validation = validateQuestionDetailed(question, slot.questionType);
 
-        let filledThisAttempt = 0;
-
-        for (let i = 0; i < intents.length && i < questions.length; i++) {
-          const slot = intents[i].slot;
-          const question = questions[i];
-
-          if (question && validateQuestion(question, slot.questionType)) {
-            registerQuestion(registry, topic, bloom, question);
-            slot.filled = true;
-            slot.question = question;
-            slot.source = 'ai';
-            filledSlots.push(slot);
-            filledThisAttempt++;
-          }
+        if (question && validation.valid) {
+          question.slot_id = slot.id;
+          registerQuestion(registry, slot.topic, slot.bloomLevel, question);
+          slot.filled = true;
+          slot.question = question;
+          slot.source = 'ai';
+          filledSlots.push(slot);
+        } else {
+          const reason = validation.reason || 'AI returned no question';
+          console.warn(`🔁 Slot ${slot.id} retry ${attempt}/${MAX_SLOT_RETRY_ATTEMPTS}: ${reason}`);
+          registry.failureLog.push({
+            phase: 'ai_slot_generation',
+            slotId: slot.id,
+            topic: slot.topic,
+            bloomLevel: slot.bloomLevel,
+            questionType: slot.questionType,
+            attempt,
+            reason
+          });
         }
-
-        pendingSlots = pendingSlots.filter(s => !s.filled);
-
-        if (pendingSlots.length > 0) {
-          console.warn(`🔁 Retry ${attempt}/3: ${pendingSlots.length} slots still unfilled for ${key}`);
-        }
-
-        if (filledThisAttempt === 0) {
-          break;
-        }
-
       } catch (error) {
-        console.error(`AI generation attempt ${attempt} failed for ${key}:`, error);
+        const reason = error instanceof Error ? error.message : String(error);
+        console.error(`AI generation attempt ${attempt} failed for slot ${slot.id}:`, error);
+        registry.failureLog.push({
+          phase: 'ai_slot_generation',
+          slotId: slot.id,
+          topic: slot.topic,
+          bloomLevel: slot.bloomLevel,
+          questionType: slot.questionType,
+          attempt,
+          reason
+        });
       }
     }
 
-    if (pendingSlots.length > 0) {
-      console.warn(`⚠️ Could not fill ${pendingSlots.length} slots for ${key} after retries`);
+    if (!slot.filled) {
+      console.warn(`⚠️ Could not fill slot ${slot.id} after ${MAX_SLOT_RETRY_ATTEMPTS} retries`);
     }
   }
 
@@ -862,8 +869,16 @@ async function fillSlotsWithAI(
  * Validate question structure based on type
  */
 function validateQuestion(question: any, questionType: string): boolean {
+  return validateQuestionDetailed(question, questionType).valid;
+}
+
+function validateQuestionDetailed(question: any, questionType: string): { valid: boolean; reason?: string } {
+  if (!question) {
+    return { valid: false, reason: 'AI returned no question object' };
+  }
+
   if (!question.question_text || question.question_text.length < 10) {
-    return false;
+    return { valid: false, reason: 'Question text is missing or too short' };
   }
 
   if (questionType === 'mcq') {
@@ -871,7 +886,7 @@ function validateQuestion(question: any, questionType: string): boolean {
     const choices = question.choices;
     if (!choices || typeof choices !== 'object') {
       console.warn('MCQ missing choices object');
-      return false;
+      return { valid: false, reason: 'MCQ missing choices object' };
     }
     
     const hasAllOptions = ['A', 'B', 'C', 'D'].every(key => 
@@ -880,13 +895,13 @@ function validateQuestion(question: any, questionType: string): boolean {
     
     if (!hasAllOptions) {
       console.warn('MCQ missing one or more options (A, B, C, D)');
-      return false;
+      return { valid: false, reason: 'MCQ missing one or more options (A, B, C, D)' };
     }
     
     // ENFORCE: correct_answer must be A, B, C, or D
     if (!['A', 'B', 'C', 'D'].includes(question.correct_answer)) {
       console.warn(`MCQ has invalid correct_answer: ${question.correct_answer}`);
-      return false;
+      return { valid: false, reason: `MCQ has invalid correct_answer: ${question.correct_answer}` };
     }
   }
 
@@ -894,7 +909,7 @@ function validateQuestion(question: any, questionType: string): boolean {
     // ENFORCE: correct_answer must be "True" or "False"
     if (!['True', 'False', 'true', 'false'].includes(String(question.correct_answer))) {
       console.warn(`T/F has invalid correct_answer: ${question.correct_answer}`);
-      return false;
+      return { valid: false, reason: `T/F has invalid correct_answer: ${question.correct_answer}` };
     }
   }
 
@@ -902,7 +917,7 @@ function validateQuestion(question: any, questionType: string): boolean {
     // ENFORCE: Must have a correct_answer or model answer
     if (!question.correct_answer && !question.answer) {
       console.warn('Short answer missing correct_answer');
-      return false;
+      return { valid: false, reason: 'Short answer missing correct_answer' };
     }
   }
 
@@ -914,7 +929,7 @@ function validateQuestion(question: any, questionType: string): boolean {
     }
   }
 
-  return true;
+  return { valid: true };
 }
 
 function selectNextConcept(registry: GenerationRegistry, topic: string): string {
@@ -1764,7 +1779,8 @@ serve(async (req) => {
       usedConcepts: {},
       usedOperations: {},
       usedPairs: [],
-      usedQuestionTexts: []
+      usedQuestionTexts: [],
+      failureLog: []
     };
 
     // STEP 1: Expand TOS into slots with question types
@@ -1807,6 +1823,7 @@ serve(async (req) => {
       const filledSlot = filledById.get(slot.id);
       if (filledSlot && filledSlot.question) {
         filledSlot.question.points = filledSlot.points;
+        filledSlot.question.slot_id = slot.id;
         rawQuestions.push(filledSlot.question);
       }
     }
@@ -1836,13 +1853,20 @@ serve(async (req) => {
       }
       
       // VALIDATE: Check semantic similarity against already-accepted questions
-      const similarityCheck = checkSemanticRedundancy(normalizedText, acceptedTexts, 0.70);
+      const similarityCheck = checkSemanticRedundancy(normalizedText, acceptedTexts, SEMANTIC_REJECTION_THRESHOLD);
       if (similarityCheck.isRedundant) {
         console.warn(`   🔁 Redundant question detected (${(similarityCheck.similarity! * 100).toFixed(0)}% similar): "${normalizedText.substring(0, 50)}..."`);
         rejectedQuestions.push({
           ...q,
           rejection_reason: `Semantically similar to existing question (${(similarityCheck.similarity! * 100).toFixed(0)}% match)`,
           similar_to: similarityCheck.mostSimilar
+        });
+        registry.failureLog.push({
+          phase: 'normalization_validation',
+          topic: q.topic,
+          bloomLevel: q.bloom_level,
+          questionType: q.question_type,
+          reason: `Rejected as semantically similar (${(similarityCheck.similarity! * 100).toFixed(0)}% match)`
         });
         continue; // Skip this question
       }
@@ -1853,6 +1877,7 @@ serve(async (req) => {
         if (!choices || typeof choices !== 'object') {
           console.warn(`   ❌ MCQ missing choices object, skipping`);
           rejectedQuestions.push({ ...q, rejection_reason: 'Missing choices object' });
+          registry.failureLog.push({ phase: 'normalization_validation', topic: q.topic, bloomLevel: q.bloom_level, questionType: q.question_type, reason: 'Missing choices object' });
           continue;
         }
         
@@ -1863,6 +1888,7 @@ serve(async (req) => {
         if (!hasAllOptions) {
           console.warn(`   ❌ MCQ missing required options A-D, skipping`);
           rejectedQuestions.push({ ...q, rejection_reason: 'Missing or empty options A-D' });
+          registry.failureLog.push({ phase: 'normalization_validation', topic: q.topic, bloomLevel: q.bloom_level, questionType: q.question_type, reason: 'Missing or empty options A-D' });
           continue;
         }
         
@@ -1888,6 +1914,7 @@ serve(async (req) => {
         if (hasPlaceholder) {
           console.warn(`   ❌ MCQ contains placeholder content, skipping`);
           rejectedQuestions.push({ ...q, rejection_reason: 'Contains placeholder content' });
+          registry.failureLog.push({ phase: 'normalization_validation', topic: q.topic, bloomLevel: q.bloom_level, questionType: q.question_type, reason: 'Contains placeholder content' });
           continue;
         }
       }
@@ -1904,7 +1931,6 @@ serve(async (req) => {
     // ============= STEP 4: COMPLETION GATE - ENFORCE EXACT TOS COUNT =============
     const requiredTotal = body.total_items;
     let completionAttempts = 0;
-    const MAX_COMPLETION_ATTEMPTS = 3;
     
     while (normalizedQuestions.length < requiredTotal && completionAttempts < MAX_COMPLETION_ATTEMPTS) {
       completionAttempts++;
@@ -1919,11 +1945,14 @@ serve(async (req) => {
       
       for (const slot of allSlots) {
         const filledSlot = filledById.get(slot.id);
+        if (usedSlotIds.has(slot.id)) {
+          continue;
+        }
         if (!filledSlot || !filledSlot.filled) {
-          unfilledSlots.push(slot);
+          unfilledSlots.push({ ...slot, filled: false, question: undefined, source: undefined });
         } else if (!usedSlotIds.has(slot.id) && !usedSlotIds.has(filledSlot.question?.id)) {
           // This slot had a question but it was rejected during validation
-          unfilledSlots.push(slot);
+          unfilledSlots.push({ ...slot, filled: false, question: undefined, source: undefined });
         }
       }
       
@@ -1963,9 +1992,19 @@ serve(async (req) => {
         const normalizedText = normalizeQuestionText(q.question_text || '');
         
         // Check for redundancy against existing accepted questions
-        const similarityCheck = checkSemanticRedundancy(normalizedText, acceptedTexts, 0.70);
+        const similarityCheck = checkSemanticRedundancy(normalizedText, acceptedTexts, SEMANTIC_REJECTION_THRESHOLD);
         if (similarityCheck.isRedundant) {
-          console.log(`   🔁 Repair question redundant, skipping`);
+          const reason = `Repair question redundant (${((similarityCheck.similarity || 0) * 100).toFixed(0)}% match)`;
+          console.log(`   🔁 ${reason}, retrying another slot`);
+          registry.failureLog.push({
+            phase: 'completion_gate',
+            slotId: slot.id,
+            topic: q.topic,
+            bloomLevel: q.bloom_level,
+            questionType: q.question_type,
+            attempt: completionAttempts,
+            reason
+          });
           continue;
         }
         
@@ -1985,6 +2024,7 @@ serve(async (req) => {
         
         q.question_text = normalizedText;
         q.metadata = { ...(q.metadata || {}), repair_attempt: completionAttempts };
+        filledById.set(slot.id, slot);
         normalizedQuestions.push(q);
         acceptedTexts.push(normalizedText.toLowerCase());
         repairAccepted++;
@@ -1993,10 +2033,9 @@ serve(async (req) => {
       console.log(`   ✅ Repair attempt ${completionAttempts}: added ${repairAccepted} questions`);
       console.log(`   📊 New total: ${normalizedQuestions.length}/${requiredTotal}`);
       
-      // If no progress was made, break to avoid infinite loop
+      // If no progress was made, keep retrying up to the configured limit so transient AI/validation misses don't end generation early
       if (repairAccepted === 0) {
-        console.warn(`   ⚠️ No progress made in repair attempt, breaking`);
-        break;
+        console.warn(`   ⚠️ No progress made in repair attempt; continuing retries until limit is reached`);
       }
     }
     
@@ -2063,6 +2102,8 @@ serve(async (req) => {
       ai_generated: aiFilled.filter(s => s.filled).length,
       unfilled: allSlots.length - filledById.size,
       rejected_redundant: rejectedQuestions.length,
+      failure_reasons: registry.failureLog,
+      completion_attempts: completionAttempts,
       normalization_applied: true,
       semantic_validation: true,
       by_question_type: typeCounts,
@@ -2094,12 +2135,23 @@ serve(async (req) => {
           topic: s.topic,
           bloom: s.bloomLevel,
           difficulty: s.difficulty,
-          question_type: s.questionType,
+          question_type: String(s.questionType),
           points: s.points,
           filled: filled?.filled ?? false,
           source: filled?.source || 'unfilled'
         };
-      }),
+      }).concat(registry.failureLog.map((failure, index) => ({
+        slot_id: failure.slotId || `failure_${index + 1}`,
+        topic: failure.topic || 'unknown',
+        bloom: failure.bloomLevel || 'unknown',
+        difficulty: 'unknown',
+        question_type: failure.questionType || 'unknown',
+        points: 0,
+        filled: false,
+        source: failure.phase,
+        reason: failure.reason,
+        attempt: failure.attempt
+      }))),
       statistics: stats,
       tos_id: body.tos_id
     }), {

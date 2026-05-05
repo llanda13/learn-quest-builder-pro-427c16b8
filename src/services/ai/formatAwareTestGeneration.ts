@@ -17,6 +17,11 @@ import { QuestionUniquenessStore, createQuestionFingerprint, extractConcept } fr
 import type { AnswerType, KnowledgeDimension } from "@/types/knowledge";
 import { resolveSubjectMetadata } from "./subjectMetadataResolver";
 
+const AI_GENERATION_BATCH_SIZE = 3;
+const MAX_AI_GENERATION_RETRIES = 6;
+const MAX_SECTION_COMPLETION_RETRIES = 8;
+const DUPLICATE_SIMILARITY_THRESHOLD = 0.88;
+
 export interface FormatAwareTestConfig {
   format: ExamFormat;
   tosCriteria: TOSCriteria[];
@@ -133,8 +138,7 @@ export async function generateFormatAwareTest(
 
     // COMPLETION GATE: Retry if section is short
     let retryAttempt = 0;
-    const MAX_SECTION_RETRIES = 2;
-    while (sectionQuestions.length < actualQuestionCount && retryAttempt < MAX_SECTION_RETRIES) {
+    while (sectionQuestions.length < actualQuestionCount && retryAttempt < MAX_SECTION_COMPLETION_RETRIES) {
       retryAttempt++;
       const shortfall = actualQuestionCount - sectionQuestions.length;
       console.log(`   🔄 Section ${section.label} retry ${retryAttempt}: need ${shortfall} more ${section.questionType} questions`);
@@ -149,6 +153,9 @@ export async function generateFormatAwareTest(
         allQuestionTexts
       );
       sectionQuestions = [...sectionQuestions, ...repairQuestions];
+      if (repairQuestions.length === 0) {
+        console.warn(`   ⚠️ Section ${section.label} retry ${retryAttempt} produced no accepted questions; continuing until retry limit`);
+      }
     }
 
     // Trim to exact count
@@ -394,7 +401,7 @@ function computeTextSimilarity(text1: string, text2: string): number {
 function isDuplicateByText(
   questionText: string,
   existingTexts: string[],
-  threshold: number = 0.7
+  threshold: number = DUPLICATE_SIMILARITY_THRESHOLD
 ): boolean {
   for (const existing of existingTexts) {
     if (computeTextSimilarity(questionText, existing) >= threshold) {
@@ -607,16 +614,15 @@ async function generateTypedQuestions(
   uniquenessStore: QuestionUniquenessStore,
   allQuestionTexts: string[]
 ): Promise<any[]> {
-  const MAX_RETRIES = 2;
   let attempt = 0;
   const accepted: any[] = [];
 
-  while (accepted.length < count && attempt <= MAX_RETRIES) {
+  while (accepted.length < count && attempt < MAX_AI_GENERATION_RETRIES) {
     attempt++;
     const needed = count - accepted.length;
 
     try {
-      const aiQuestions = await generateTypedQuestionsViaAI(questionType, criteria, needed, userId);
+      const aiQuestions = await generateTypedQuestionsViaAI(questionType, criteria, Math.min(needed, AI_GENERATION_BATCH_SIZE), userId);
 
       for (const q of aiQuestions) {
         if (accepted.length >= count) break;
@@ -639,12 +645,17 @@ async function generateTypedQuestions(
         );
         const uniqueCheck = uniquenessStore.checkWithSuggestions(fp);
         if (!uniqueCheck.unique) {
-          console.log(`   🔄 Rejected structurally redundant AI question: ${uniqueCheck.reason}`);
-          continue;
+          console.warn(`   ⚠️ Structurally similar AI question accepted with review flag: ${uniqueCheck.reason}`);
+          q.needs_review = true;
+          q.metadata = {
+            ...(q.metadata || {}),
+            validation_warning: uniqueCheck.reason
+          };
+        } else {
+          uniquenessStore.register(fp);
         }
 
         // Passed all checks — accept
-        uniquenessStore.register(fp);
         allQuestionTexts.push(qText);
         accepted.push(q);
       }
@@ -653,7 +664,7 @@ async function generateTypedQuestions(
       console.log(`   ⚠️ After AI attempt ${attempt}: ${accepted.length}/${count} unique questions accepted`);
     } catch (error) {
       console.error(`   ❌ AI generation attempt ${attempt} failed:`, error);
-      break; // Don't retry on hard errors
+      console.warn(`   🔁 Continuing generation retries after failure (${attempt}/${MAX_AI_GENERATION_RETRIES})`);
     }
   }
 
