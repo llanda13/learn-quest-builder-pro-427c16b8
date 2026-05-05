@@ -868,8 +868,16 @@ async function fillSlotsWithAI(
  * Validate question structure based on type
  */
 function validateQuestion(question: any, questionType: string): boolean {
+  return validateQuestionDetailed(question, questionType).valid;
+}
+
+function validateQuestionDetailed(question: any, questionType: string): { valid: boolean; reason?: string } {
+  if (!question) {
+    return { valid: false, reason: 'AI returned no question object' };
+  }
+
   if (!question.question_text || question.question_text.length < 10) {
-    return false;
+    return { valid: false, reason: 'Question text is missing or too short' };
   }
 
   if (questionType === 'mcq') {
@@ -877,7 +885,7 @@ function validateQuestion(question: any, questionType: string): boolean {
     const choices = question.choices;
     if (!choices || typeof choices !== 'object') {
       console.warn('MCQ missing choices object');
-      return false;
+      return { valid: false, reason: 'MCQ missing choices object' };
     }
     
     const hasAllOptions = ['A', 'B', 'C', 'D'].every(key => 
@@ -886,13 +894,13 @@ function validateQuestion(question: any, questionType: string): boolean {
     
     if (!hasAllOptions) {
       console.warn('MCQ missing one or more options (A, B, C, D)');
-      return false;
+      return { valid: false, reason: 'MCQ missing one or more options (A, B, C, D)' };
     }
     
     // ENFORCE: correct_answer must be A, B, C, or D
     if (!['A', 'B', 'C', 'D'].includes(question.correct_answer)) {
       console.warn(`MCQ has invalid correct_answer: ${question.correct_answer}`);
-      return false;
+      return { valid: false, reason: `MCQ has invalid correct_answer: ${question.correct_answer}` };
     }
   }
 
@@ -900,7 +908,7 @@ function validateQuestion(question: any, questionType: string): boolean {
     // ENFORCE: correct_answer must be "True" or "False"
     if (!['True', 'False', 'true', 'false'].includes(String(question.correct_answer))) {
       console.warn(`T/F has invalid correct_answer: ${question.correct_answer}`);
-      return false;
+      return { valid: false, reason: `T/F has invalid correct_answer: ${question.correct_answer}` };
     }
   }
 
@@ -908,7 +916,7 @@ function validateQuestion(question: any, questionType: string): boolean {
     // ENFORCE: Must have a correct_answer or model answer
     if (!question.correct_answer && !question.answer) {
       console.warn('Short answer missing correct_answer');
-      return false;
+      return { valid: false, reason: 'Short answer missing correct_answer' };
     }
   }
 
@@ -920,7 +928,7 @@ function validateQuestion(question: any, questionType: string): boolean {
     }
   }
 
-  return true;
+  return { valid: true };
 }
 
 function selectNextConcept(registry: GenerationRegistry, topic: string): string {
