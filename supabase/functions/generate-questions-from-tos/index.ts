@@ -1941,6 +1941,9 @@ serve(async (req) => {
       
       for (const slot of allSlots) {
         const filledSlot = filledById.get(slot.id);
+        if (usedSlotIds.has(slot.id)) {
+          continue;
+        }
         if (!filledSlot || !filledSlot.filled) {
           unfilledSlots.push(slot);
         } else if (!usedSlotIds.has(slot.id) && !usedSlotIds.has(filledSlot.question?.id)) {
