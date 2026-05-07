@@ -57,6 +57,9 @@ interface SubjectContext {
   description: string;
   technicalKeywords: string[];
   isTechnical: boolean;
+  // Transient — set per-batch so the SUBJECT ANCHOR can include item position and
+  // checkpoint reinforcement to prevent context exhaustion on long generations.
+  position?: { current: number; total: number; checkpoint?: boolean };
 }
 
 /**
