@@ -512,6 +512,15 @@ All colors MUST be HSL.
   /* Answer Key */
   .print-exam-only .answer-key-section {
     page-break-before: always !important;
+    break-before: page !important;
+    page-break-inside: avoid !important;
+    break-inside: avoid-page !important;
+    min-height: 235mm !important;
+    max-height: 235mm !important;
+    overflow: hidden !important;
+    display: flex !important;
+    flex-direction: column !important;
+    justify-content: center !important;
     margin-top: 0 !important;
     padding-top: 0 !important;
   }
@@ -540,15 +549,17 @@ All colors MUST be HSL.
 
   .print-exam-only .answer-key-grid {
     display: grid !important;
-    grid-template-columns: repeat(5, 1fr) !important;
-    gap: 6pt !important;
+    grid-template-columns: repeat(5, minmax(0, 1fr)) !important;
+    gap: 4pt !important;
+    max-height: 170mm !important;
+    overflow: hidden !important;
   }
 
   .print-exam-only .answer-key-item {
     display: flex !important;
     gap: 4pt !important;
-    font-size: 10pt !important;
-    padding: 3pt 6pt !important;
+    font-size: 9pt !important;
+    padding: 2pt 4pt !important;
     border: 1pt solid #ccc !important;
   }
 

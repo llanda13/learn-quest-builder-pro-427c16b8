@@ -29,19 +29,7 @@ export async function exportToPDF(
   }
 
   try {
-    // Generate canvas from HTML
-    const canvas = await html2canvas(element, {
-      scale: options.scale || 2,
-      useCORS: true,
-      allowTaint: true,
-      logging: false,
-      backgroundColor: '#ffffff',
-      width: element.scrollWidth,
-      height: element.scrollHeight
-    });
-
-    // Create PDF
-    const imgData = canvas.toDataURL('image/png', options.quality || 0.95);
+    const jpegQuality = options.quality ?? 0.75;
     const pdf = new jsPDF({
       orientation: options.orientation || 'portrait',
       unit: 'mm',
@@ -51,21 +39,62 @@ export async function exportToPDF(
     const pdfWidth = pdf.internal.pageSize.getWidth();
     const pdfHeight = pdf.internal.pageSize.getHeight();
     const imgWidth = pdfWidth;
-    const imgHeight = (canvas.height * imgWidth) / canvas.width;
+    const sections = Array.from(element.querySelectorAll<HTMLElement>('[data-pdf-section]'));
+    const sectionsToCapture = sections.length > 0 ? sections : [element];
+    let hasContent = false;
 
-    let heightLeft = imgHeight;
-    let position = 0;
+    for (const section of sectionsToCapture) {
+      const isAnswerKey = section.dataset.pdfSection === 'answer-key' || section.classList.contains('answer-key-section');
+      const captureWidth = Math.ceil(section.scrollWidth || section.offsetWidth);
+      const captureHeight = Math.ceil(isAnswerKey ? section.offsetHeight : section.scrollHeight);
+      const canvas = await html2canvas(section, {
+        scale: options.scale || 1.5,
+        useCORS: true,
+        allowTaint: true,
+        logging: false,
+        backgroundColor: '#ffffff',
+        width: captureWidth,
+        height: captureHeight
+      });
+      const imgHeight = (canvas.height * imgWidth) / canvas.width;
 
-    // Add first page
-    pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-    heightLeft -= pdfHeight;
+      if (isAnswerKey) {
+        if (hasContent) pdf.addPage();
+        const fitScale = Math.min(1, pdfHeight / imgHeight);
+        const renderW = imgWidth * fitScale;
+        const renderH = imgHeight * fitScale;
+        pdf.addImage(canvas.toDataURL('image/jpeg', jpegQuality), 'JPEG', (pdfWidth - renderW) / 2, (pdfHeight - renderH) / 2, renderW, renderH, undefined, 'FAST');
+        hasContent = true;
+        continue;
+      }
 
-    // Add additional pages if content is longer than one page
-    while (heightLeft >= 0) {
-      position = heightLeft - imgHeight;
-      pdf.addPage();
-      pdf.addImage(imgData, 'PNG', 0, position, imgWidth, imgHeight);
-      heightLeft -= pdfHeight;
+      if (imgHeight <= pdfHeight) {
+        if (hasContent) pdf.addPage();
+        pdf.addImage(canvas.toDataURL('image/jpeg', jpegQuality), 'JPEG', 0, 0, imgWidth, imgHeight, undefined, 'FAST');
+        hasContent = true;
+      } else {
+        const ratio = canvas.width / imgWidth;
+        let remaining = imgHeight;
+        let srcY = 0;
+        while (remaining > 0) {
+          if (hasContent || srcY > 0) pdf.addPage();
+          const sliceH = Math.min(remaining, pdfHeight);
+          const srcSliceH = sliceH * ratio;
+          const sc = document.createElement('canvas');
+          sc.width = canvas.width;
+          sc.height = srcSliceH;
+          const ctx = sc.getContext('2d');
+          if (ctx) {
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, sc.width, sc.height);
+            ctx.drawImage(canvas, 0, srcY, canvas.width, srcSliceH, 0, 0, canvas.width, srcSliceH);
+            pdf.addImage(sc.toDataURL('image/jpeg', jpegQuality), 'JPEG', 0, 0, imgWidth, sliceH, undefined, 'FAST');
+          }
+          hasContent = true;
+          srcY += srcSliceH;
+          remaining -= pdfHeight;
+        }
+      }
     }
 
     // Generate blob

@@ -5,6 +5,11 @@ import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { addWatermarkToPDF, generateWatermarkCode, logSecurityEvent } from '@/services/testGeneration/security';
 
+interface ExportQuestion {
+  question_text?: string;
+  question?: string;
+}
+
 export const usePDFExport = () => {
   const uploadToStorage = useCallback(async (blob: Blob, filename: string, folder: string) => {
     try {
@@ -56,45 +61,43 @@ export const usePDFExport = () => {
       const pdfWidth = pdf.internal.pageSize.getWidth();
       const pdfHeight = pdf.internal.pageSize.getHeight();
 
-      // Convert HTML to canvas
+      // Convert HTML to canvas (lower scale + JPEG for compact text PDFs)
       const canvas = await html2canvas(element, {
-        scale: 2,
+        scale: 1.5,
         useCORS: true,
         allowTaint: true,
         backgroundColor: '#ffffff'
       });
 
-      const imgData = canvas.toDataURL('image/png');
       const imgWidth = pdfWidth - 20; // 10mm margin on each side
+      const usableH = pdfHeight - 20;
       const imgHeight = (canvas.height * imgWidth) / canvas.width;
 
-      // Add image to PDF
-      if (imgHeight <= pdfHeight - 20) {
-        // Fits on one page
-        pdf.addImage(imgData, 'PNG', 10, 10, imgWidth, imgHeight);
+      if (imgHeight <= usableH) {
+        pdf.addImage(canvas.toDataURL('image/jpeg', 0.75), 'JPEG', 10, 10, imgWidth, imgHeight, undefined, 'FAST');
       } else {
-        // Multiple pages needed
-        let remainingHeight = imgHeight;
-        let position = 0;
-        
-        while (remainingHeight > 0) {
-          const pageHeight = Math.min(remainingHeight, pdfHeight - 20);
-          
-          if (position > 0) {
-            pdf.addPage();
+        // Slice the source canvas per page so we never embed the full image more than once
+        const ratio = canvas.width / imgWidth;
+        let remaining = imgHeight;
+        let srcY = 0;
+        let first = true;
+        while (remaining > 0) {
+          if (!first) pdf.addPage();
+          first = false;
+          const sliceH = Math.min(remaining, usableH);
+          const srcSliceH = sliceH * ratio;
+          const sc = document.createElement('canvas');
+          sc.width = canvas.width;
+          sc.height = srcSliceH;
+          const ctx = sc.getContext('2d');
+          if (ctx) {
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, sc.width, sc.height);
+            ctx.drawImage(canvas, 0, srcY, canvas.width, srcSliceH, 0, 0, canvas.width, srcSliceH);
+            pdf.addImage(sc.toDataURL('image/jpeg', 0.75), 'JPEG', 10, 10, imgWidth, sliceH, undefined, 'FAST');
           }
-          
-          pdf.addImage(
-            imgData, 
-            'PNG', 
-            10, 
-            10, 
-            imgWidth, 
-            imgHeight
-          );
-          
-          remainingHeight -= (pdfHeight - 20);
-          position += (pdfHeight - 20);
+          srcY += srcSliceH;
+          remaining -= usableH;
         }
       }
 
@@ -135,7 +138,7 @@ export const usePDFExport = () => {
   }, [uploadToStorage]);
 
   const exportTestQuestions = useCallback(async (
-    questions: any[], 
+    questions: ExportQuestion[], 
     testTitle: string, 
     uploadToCloud: boolean = false, 
     versionLabel?: string,
@@ -157,48 +160,78 @@ export const usePDFExport = () => {
         printElement.style.padding = '15mm';
         printElement.style.fontFamily = '"Times New Roman", Times, serif';
 
-        const canvas = await html2canvas(printElement, {
-          scale: 2.5,
-          useCORS: true,
-          backgroundColor: '#ffffff',
-          width: printElement.scrollWidth,
-          height: printElement.scrollHeight,
-        });
-
-        // Restore original display
-        printElement.style.display = originalDisplay;
-        printElement.style.position = '';
-        printElement.style.width = '';
-        printElement.style.padding = '';
-
         const pdf = new jsPDF('p', 'mm', 'a4');
         const pdfW = pdf.internal.pageSize.getWidth();
         const pdfH = pdf.internal.pageSize.getHeight();
         const mx = 10, my = 8;
         const usableW = pdfW - mx * 2;
         const usableH = pdfH - my * 2;
-        const imgH = (canvas.height * usableW) / canvas.width;
+        let hasContent = false;
 
-        if (imgH <= usableH) {
-          pdf.addImage(canvas.toDataURL('image/png', 0.95), 'PNG', mx, my, usableW, imgH);
-        } else {
-          let remaining = imgH, srcY = 0;
-          const ratio = canvas.width / usableW;
-          while (remaining > 0) {
-            if (srcY > 0) pdf.addPage();
-            const sliceH = Math.min(remaining, usableH);
-            const srcSliceH = sliceH * ratio;
-            const sc = document.createElement('canvas');
-            sc.width = canvas.width;
-            sc.height = srcSliceH;
-            const ctx = sc.getContext('2d');
-            if (ctx) {
-              ctx.drawImage(canvas, 0, srcY, canvas.width, srcSliceH, 0, 0, canvas.width, srcSliceH);
-              pdf.addImage(sc.toDataURL('image/png', 0.95), 'PNG', mx, my, usableW, sliceH);
-            }
-            srcY += srcSliceH;
-            remaining -= usableH;
+        const exportSections = Array.from(printElement.querySelectorAll<HTMLElement>('[data-pdf-section]'));
+        const sectionsToCapture = exportSections.length > 0 ? exportSections : [printElement];
+
+        try {
+        for (const section of sectionsToCapture) {
+          const isAnswerKey = section.dataset.pdfSection === 'answer-key' || section.classList.contains('answer-key-section');
+          const captureWidth = Math.ceil(section.scrollWidth || section.offsetWidth);
+          const captureHeight = Math.ceil(isAnswerKey ? section.offsetHeight : section.scrollHeight);
+          const canvas = await html2canvas(section, {
+            scale: 1.5,
+            useCORS: true,
+            backgroundColor: '#ffffff',
+            width: captureWidth,
+            height: captureHeight,
+          });
+
+          if (isAnswerKey) {
+            if (hasContent) pdf.addPage();
+            const naturalH = (canvas.height * usableW) / canvas.width;
+            const fitScale = Math.min(1, usableH / naturalH);
+            const renderW = usableW * fitScale;
+            const renderH = naturalH * fitScale;
+            const x = mx + (usableW - renderW) / 2;
+            const y = my + (usableH - renderH) / 2;
+            pdf.addImage(canvas.toDataURL('image/jpeg', 0.75), 'JPEG', x, y, renderW, renderH, undefined, 'FAST');
+            hasContent = true;
+            continue;
           }
+
+          const imgH = (canvas.height * usableW) / canvas.width;
+
+          if (imgH <= usableH) {
+            if (hasContent) pdf.addPage();
+            pdf.addImage(canvas.toDataURL('image/jpeg', 0.75), 'JPEG', mx, my, usableW, imgH, undefined, 'FAST');
+            hasContent = true;
+          } else {
+            let remaining = imgH, srcY = 0;
+            const ratio = canvas.width / usableW;
+            while (remaining > 0) {
+              if (hasContent || srcY > 0) pdf.addPage();
+              const sliceH = Math.min(remaining, usableH);
+              const srcSliceH = sliceH * ratio;
+              const sc = document.createElement('canvas');
+              sc.width = canvas.width;
+              sc.height = srcSliceH;
+              const ctx = sc.getContext('2d');
+              if (ctx) {
+                ctx.fillStyle = '#ffffff';
+                ctx.fillRect(0, 0, sc.width, sc.height);
+                ctx.drawImage(canvas, 0, srcY, canvas.width, srcSliceH, 0, 0, canvas.width, srcSliceH);
+                pdf.addImage(sc.toDataURL('image/jpeg', 0.75), 'JPEG', mx, my, usableW, sliceH, undefined, 'FAST');
+              }
+              hasContent = true;
+              srcY += srcSliceH;
+              remaining -= usableH;
+            }
+          }
+        }
+        } finally {
+          // Restore original display
+          printElement.style.display = originalDisplay;
+          printElement.style.position = '';
+          printElement.style.width = '';
+          printElement.style.padding = '';
         }
 
         // Add watermarks if version label and test ID are provided

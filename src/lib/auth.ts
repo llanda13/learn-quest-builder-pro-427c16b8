@@ -115,7 +115,9 @@ export const useAuthState = () => {
   };
 
   const signOut = async () => {
-    await supabase.auth.signOut();
+    // Use 'local' scope so signing out only affects THIS device/browser,
+    // not all active sessions for the user across other devices.
+    await supabase.auth.signOut({ scope: 'local' });
   };
 
   const refreshProfile = async () => {

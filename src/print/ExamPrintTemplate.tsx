@@ -62,7 +62,7 @@ function groupAllQuestionTypes(items: TestItem[]): GroupedQuestions {
 }
 
 export function ExamPrintTemplate({ test, showAnswerKey = false }: ExamPrintTemplateProps) {
-  const items: TestItem[] = Array.isArray(test.items) ? test.items : [];
+  const items: TestItem[] = useMemo(() => Array.isArray(test.items) ? test.items : [], [test.items]);
   const groupedQuestions = useMemo(() => groupAllQuestionTypes(items), [items]);
 
   const totalPoints = items.reduce((sum, item) => sum + (item.points || 1), 0);
@@ -120,13 +120,14 @@ export function ExamPrintTemplate({ test, showAnswerKey = false }: ExamPrintTemp
 
   return (
     <div className="print-exam-only" style={{ fontFamily: '"Times New Roman", Times, serif' }}>
-      {/* ISO Document Header */}
-      <ISODocumentHeader
-        docNo="F-DOI-018"
-        effectiveDate="08/25/2017"
-        revNo="0"
-        pageInfo={`1 of ${totalPages}`}
-      />
+      <section className="questionnaire-section" data-pdf-section="questions">
+        {/* ISO Document Header */}
+        <ISODocumentHeader
+          docNo="F-DOI-018"
+          effectiveDate="08/25/2017"
+          revNo="0"
+          pageInfo={`1 of ${totalPages}`}
+        />
 
       {/* Title in bordered box */}
       <div style={{
@@ -224,43 +225,35 @@ export function ExamPrintTemplate({ test, showAnswerKey = false }: ExamPrintTemp
         );
       })}
 
-      {/* Prepared by */}
-      <div style={{ marginTop: '30pt', fontSize: '11pt' }}>
-        <div>Prepared by:</div>
-        <div style={{ marginTop: '20pt', fontWeight: 'bold', textTransform: 'uppercase' }}>
-          {test.prepared_by || '________________________'}
+        {/* Prepared by */}
+        <div style={{ marginTop: '30pt', fontSize: '11pt' }}>
+          <div>Prepared by:</div>
+          <div style={{ marginTop: '20pt', fontWeight: 'bold', textTransform: 'uppercase' }}>
+            {test.prepared_by || '________________________'}
+          </div>
+          <div style={{ fontSize: '10pt', fontStyle: 'italic' }}>Subject Instructor</div>
         </div>
-        <div style={{ fontSize: '10pt', fontStyle: 'italic' }}>Subject Instructor</div>
-      </div>
+      </section>
 
       {/* Answer Key (on new page) */}
       {showAnswerKey && (
-        <div className="answer-key-section" style={{ pageBreakBefore: 'always' }}>
+        <section className="answer-key-section" data-pdf-section="answer-key" style={{ pageBreakBefore: 'always', breakBefore: 'page', minHeight: '235mm', maxHeight: '235mm', overflow: 'hidden', display: 'flex', flexDirection: 'column', justifyContent: 'center' }}>
           <h2 style={{ fontSize: '14pt', fontWeight: 'bold', textAlign: 'center', marginBottom: '18pt', borderBottom: '2pt solid #000', paddingBottom: '12pt' }}>
             ANSWER KEY
           </h2>
-          {sections.map((section, sIdx) => {
-            const startNum = sections.slice(0, sIdx).reduce((sum, s) => sum + s.items.length, 0) + 1;
-            return (
-              <div key={sIdx} style={{ marginBottom: '16pt' }}>
-                <h3 style={{ fontSize: '11pt', fontWeight: 'bold', marginBottom: '8pt' }}>
-                  {section.label}
-                </h3>
-                <div style={{ display: 'grid', gridTemplateColumns: 'repeat(5, 1fr)', gap: '4pt' }}>
-                  {section.items.map((item, qIdx) => {
-                    const answer = item.correct_answer ?? item.correctAnswer ?? '—';
-                    return (
-                      <div key={qIdx} style={{ display: 'flex', gap: '4pt', fontSize: '10pt', padding: '2pt 6pt', border: '1pt solid #ccc' }}>
-                        <span style={{ fontWeight: 'bold' }}>{startNum + qIdx}.</span>
-                        <span style={{ fontWeight: 'bold' }}>{String(answer)}</span>
-                      </div>
-                    );
-                  })}
-                </div>
-              </div>
-            );
-          })}
-        </div>
+          <div style={{ marginTop: '20pt', display: 'flex', justifyContent: 'center' }}>
+            <ol style={{ fontSize: '10.5pt', listStyleType: 'decimal', listStylePosition: 'inside', columnCount: items.length > 40 ? 3 : 2, columnGap: '32pt', minWidth: '60%', maxHeight: '190mm', overflow: 'hidden' }}>
+              {sections.flatMap((section) => section.items).map((item, idx) => {
+                const answer = item.correct_answer ?? item.correctAnswer ?? '—';
+                return (
+                  <li key={idx} style={{ padding: '2pt 0', breakInside: 'avoid' }}>
+                    <span style={{ fontWeight: 'bold' }}>{String(answer)}</span>
+                  </li>
+                );
+              })}
+            </ol>
+          </div>
+        </section>
       )}
     </div>
   );
@@ -295,9 +288,7 @@ function ISOQuestion({ item, number, type, showAnswer }: { item: TestItem; numbe
             {options.map((opt) => (
               <div key={opt.key} style={{ display: 'flex', gap: '4pt', fontSize: '10pt' }}>
                 <span>{opt.key.toLowerCase()}.</span>
-                <span style={showAnswer && (correctAnswer === opt.key || correctAnswer === opt.key.toLowerCase()) ? { fontWeight: 'bold', textDecoration: 'underline' } : {}}>
-                  {opt.text}
-                </span>
+                <span>{opt.text}</span>
               </div>
             ))}
           </div>
@@ -311,7 +302,7 @@ function ISOQuestion({ item, number, type, showAnswer }: { item: TestItem; numbe
       <div className="exam-question" style={{ marginBottom: '4pt', display: 'flex', alignItems: 'flex-start', gap: '4pt' }}>
         <span style={{ fontWeight: 'bold', minWidth: '20pt' }}>{number}.</span>
         <span style={{ display: 'inline-block', width: '60pt', borderBottom: '1px solid #000', marginRight: '6pt' }}>
-          {showAnswer ? String(correctAnswer) : ''}
+          &nbsp;
         </span>
         <span style={{ textAlign: 'justify', flex: 1 }}>{questionText}</span>
       </div>
@@ -335,11 +326,7 @@ function ISOQuestion({ item, number, type, showAnswer }: { item: TestItem; numbe
         <span style={{ textAlign: 'justify', flex: 1 }}>{questionText}</span>
         <span style={{ fontSize: '9pt', whiteSpace: 'nowrap' }}>({item.points || 1} {(item.points || 1) === 1 ? 'point' : 'points'})</span>
       </div>
-      {showAnswer && correctAnswer ? (
-        <div style={{ marginLeft: '24pt', padding: '6pt', border: '1pt solid #ccc', background: '#f9f9f9' }}>
-          <strong>Sample Answer:</strong> {String(correctAnswer)}
-        </div>
-      ) : (
+      {(
         <div style={{ marginLeft: '20pt' }}>
           {Array.from({ length: Math.max(5, (item.points || 1) * 2) }).map((_, i) => (
             <div key={i} style={{ borderBottom: '1pt solid #999', height: '20pt' }}></div>

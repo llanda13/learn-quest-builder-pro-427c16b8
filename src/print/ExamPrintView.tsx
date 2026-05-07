@@ -115,18 +115,19 @@ export function ExamPrintView({ test, showAnswerKey = true }: ExamPrintViewProps
 
   return (
     <div className="print-exam-only">
-      {/* Exam Header */}
-      <div className="exam-header">
-        {institution && <div className="institution-name">{institution}</div>}
-        <div className="exam-title">{test.title || 'Examination'}</div>
-        <div className="exam-meta">
-          {test.subject && <span>{test.subject}</span>}
-          {test.course && <span>{test.course}</span>}
-          {test.exam_period && <span>{test.exam_period}</span>}
-          {test.school_year && <span>S.Y. {test.school_year}</span>}
-          {test.version_label && <span>Version {test.version_label}</span>}
+      <section className="questionnaire-section" data-pdf-section="questions">
+        {/* Exam Header */}
+        <div className="exam-header">
+          {institution && <div className="institution-name">{institution}</div>}
+          <div className="exam-title">{test.title || 'Examination'}</div>
+          <div className="exam-meta">
+            {test.subject && <span>{test.subject}</span>}
+            {test.course && <span>{test.course}</span>}
+            {test.exam_period && <span>{test.exam_period}</span>}
+            {test.school_year && <span>S.Y. {test.school_year}</span>}
+            {test.version_label && <span>Version {test.version_label}</span>}
+          </div>
         </div>
-      </div>
 
       {/* Student Info Section */}
       <div className="student-info-section">
@@ -248,9 +249,11 @@ export function ExamPrintView({ test, showAnswerKey = true }: ExamPrintViewProps
         </div>
       ))}
 
+      </section>
+
       {/* Answer Key */}
       {showAnswerKey && (
-        <div className="answer-key-section">
+        <section className="answer-key-section" data-pdf-section="answer-key">
           <h2>Answer Key</h2>
           <p style={{ textAlign: 'center', marginBottom: '12pt', fontSize: '10pt' }}>
             {test.title} {test.version_label && `- Version ${test.version_label}`}
@@ -273,7 +276,7 @@ export function ExamPrintView({ test, showAnswerKey = true }: ExamPrintViewProps
               </div>
             </div>
           ))}
-        </div>
+        </section>
       )}
     </div>
   );
