@@ -1235,10 +1235,18 @@ async function generateQuestionsWithIntents(
   }>,
   apiKey: string,
   registry: GenerationRegistry,
-  subjectCtx?: SubjectContext
+  subjectCtx?: SubjectContext,
+  position?: { current: number; total: number; checkpoint?: boolean }
 ): Promise<any[]> {
   const normalizedBloom = bloom.charAt(0).toUpperCase() + bloom.slice(1).toLowerCase();
-  
+
+  // Inject the per-batch position into the SubjectContext so renderSubjectAnchor
+  // can include the checkpoint reinforcement line for technical subjects.
+  const ctxWithPos: SubjectContext | undefined = subjectCtx
+    ? { ...subjectCtx, position }
+    : undefined;
+  subjectCtx = ctxWithPos;
+
   // Group by question type for appropriate prompts
   const mcqIntents = intents.filter(i => i.questionType === 'mcq');
   const tfIntents = intents.filter(i => i.questionType === 'true_false');
