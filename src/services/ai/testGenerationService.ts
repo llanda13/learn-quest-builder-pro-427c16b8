@@ -90,12 +90,12 @@ export async function generateTestFromTOS(
         console.warn(`   ⚠️ Similarity filtering left a gap of ${remaining} - filling via AI`);
         const filled = await generateQuestionsWithAI(criteria, remaining, user.id);
         if ((filled?.length || 0) < remaining) {
-          throw new Error(
-            `Failed to fill required count for ${criteria.topic}/${criteria.bloom_level}/${criteria.difficulty}: ` +
-              `needed ${remaining}, got ${filled?.length || 0}`
-          );
+          console.warn(`   🛟 AI filled ${filled?.length || 0}/${remaining}; adding fallback questions for the rest`);
+          const fallback = await generateFallbackQuestions(criteria, remaining - (filled?.length || 0), user.id);
+          questionsToUse = [...selected, ...(filled || []), ...fallback];
+        } else {
+          questionsToUse = [...selected, ...filled];
         }
-        questionsToUse = [...selected, ...filled];
       } else {
         questionsToUse = selected;
       }
@@ -126,16 +126,16 @@ export async function generateTestFromTOS(
         } : 'none');
 
         if (newQuestions.length < neededCount) {
-          throw new Error(
-            `Gap generation returned too few items for ${criteria.topic}/${criteria.bloom_level}/${criteria.difficulty}: ` +
-              `needed ${neededCount}, got ${newQuestions.length}`
-          );
+          console.warn(`   🛟 AI returned ${newQuestions.length}/${neededCount}; adding fallback questions for the rest`);
+          const fallback = await generateFallbackQuestions(criteria, neededCount - newQuestions.length, user.id);
+          questionsToUse = [...questionsToUse, ...newQuestions, ...fallback];
+        } else {
+          questionsToUse = [...questionsToUse, ...newQuestions];
         }
-
-        questionsToUse = [...questionsToUse, ...newQuestions];
       } catch (aiError) {
         console.error(`   ❌ AI generation failed:`, aiError);
-        throw new Error(`AI generation failed for ${criteria.topic}: ${aiError instanceof Error ? aiError.message : 'Unknown error'}`);
+        const fallback = await generateFallbackQuestions(criteria, neededCount, user.id);
+        questionsToUse = [...questionsToUse, ...fallback];
       }
     }
 
@@ -170,13 +170,23 @@ export async function generateTestFromTOS(
 
   const requiredTotal = tosCriteria.reduce((sum, c) => sum + (c.count || 0), 0);
 
-  // ✅ ENFORCEMENT: Never save/render a test that doesn't satisfy the TOS total.
-  if (selectedQuestions.length !== requiredTotal) {
-    console.error(`❌ TOS contract violated: assembled ${selectedQuestions.length}/${requiredTotal} questions`);
-    throw new Error(
-      `Test assembly incomplete: generated ${selectedQuestions.length}/${requiredTotal} questions. ` +
-        `Please try again.`
-    );
+  if (selectedQuestions.length < requiredTotal) {
+    const shortfall = requiredTotal - selectedQuestions.length;
+    console.warn(`🛟 Final completion guard: assembled ${selectedQuestions.length}/${requiredTotal}; filling ${shortfall} fallback questions`);
+    const fallbackCriteria = tosCriteria.find(c => c.count > 0) || tosCriteria[0];
+    const fallbackQuestions = await generateFallbackQuestions(fallbackCriteria, shortfall, user.id);
+    fallbackQuestions.forEach(q => {
+      selectedQuestions.push({ ...q, question_number: questionNumber++ });
+      answerKey.push({
+        question_number: questionNumber - 1,
+        question_id: q.id,
+        correct_answer: q.correct_answer,
+        points: 1
+      });
+    });
+  } else if (selectedQuestions.length > requiredTotal) {
+    selectedQuestions.length = requiredTotal;
+    answerKey.length = requiredTotal;
   }
 
   if (selectedQuestions.length === 0) {

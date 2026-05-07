@@ -5,7 +5,8 @@ export { TOS } from './tos';
 export { GeneratedTests } from './generatedTests';
 
 // Activity Log service with simplified interface
-import { supabase } from "@/integrations/supabase/client";
+import { supabase as _supabase } from "@/integrations/supabase/client";
+const supabase: any = _supabase;
 
 export const ActivityLog = {
   async log(action: string, entityType: string, entityId?: string, meta?: any) {

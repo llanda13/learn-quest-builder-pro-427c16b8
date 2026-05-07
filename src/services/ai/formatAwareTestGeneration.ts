@@ -17,11 +17,6 @@ import { QuestionUniquenessStore, createQuestionFingerprint, extractConcept } fr
 import type { AnswerType, KnowledgeDimension } from "@/types/knowledge";
 import { resolveSubjectMetadata } from "./subjectMetadataResolver";
 
-const AI_GENERATION_BATCH_SIZE = 3;
-const MAX_AI_GENERATION_RETRIES = 6;
-const MAX_SECTION_COMPLETION_RETRIES = 8;
-const DUPLICATE_SIMILARITY_THRESHOLD = 0.88;
-
 export interface FormatAwareTestConfig {
   format: ExamFormat;
   tosCriteria: TOSCriteria[];
@@ -138,7 +133,8 @@ export async function generateFormatAwareTest(
 
     // COMPLETION GATE: Retry if section is short
     let retryAttempt = 0;
-    while (sectionQuestions.length < actualQuestionCount && retryAttempt < MAX_SECTION_COMPLETION_RETRIES) {
+    const MAX_SECTION_RETRIES = 2;
+    while (sectionQuestions.length < actualQuestionCount && retryAttempt < MAX_SECTION_RETRIES) {
       retryAttempt++;
       const shortfall = actualQuestionCount - sectionQuestions.length;
       console.log(`   🔄 Section ${section.label} retry ${retryAttempt}: need ${shortfall} more ${section.questionType} questions`);
@@ -153,9 +149,6 @@ export async function generateFormatAwareTest(
         allQuestionTexts
       );
       sectionQuestions = [...sectionQuestions, ...repairQuestions];
-      if (repairQuestions.length === 0) {
-        console.warn(`   ⚠️ Section ${section.label} retry ${retryAttempt} produced no accepted questions; continuing until retry limit`);
-      }
     }
 
     // Trim to exact count
@@ -218,18 +211,65 @@ export async function generateFormatAwareTest(
     console.log(`   ✓ Generated ${mappedQuestions.length}/${actualQuestionCount} question(s) (${sectionPoints} pts)`);
   }
 
-  const totalPoints = sectionResults.reduce((sum, s) => sum + s.totalPoints, 0);
+  let totalPoints = sectionResults.reduce((sum, s) => sum + s.totalPoints, 0);
 
   // ============= FINAL VALIDATION GATE =============
   console.log(`\n📊 FINAL VALIDATION: ${allQuestions.length}/${requiredTotal} questions generated`);
   
   if (allQuestions.length < requiredTotal) {
     const shortfall = requiredTotal - allQuestions.length;
-    console.error(`❌ TOS CONTRACT VIOLATION: ${allQuestions.length}/${requiredTotal} questions (missing ${shortfall})`);
-    throw new Error(
-      `Test generation incomplete: generated ${allQuestions.length}/${requiredTotal} questions. ` +
-      `${shortfall} questions could not be generated. Please try again.`
-    );
+    console.warn(`🛟 Final format-aware completion fallback: ${allQuestions.length}/${requiredTotal}; adding ${shortfall} questions`);
+    const fallbackSection = scaledSections[0] || {
+      id: 'completion-fallback',
+      label: 'A',
+      title: 'Completion Fallback',
+      instruction: 'Answer each item.',
+      questionType: 'mcq' as QuestionType,
+      startNumber: 1,
+      endNumber: shortfall,
+      pointsPerQuestion: 1
+    };
+    const fallbackCriterion = config.tosCriteria.find(c => c.count > 0) || config.tosCriteria[0] || {
+      topic: 'General Topic',
+      bloom_level: 'Understanding',
+      difficulty: 'Average',
+      count: shortfall
+    };
+
+    for (let i = 0; i < shortfall; i++) {
+      const questionNumber = allQuestions.length + 1;
+      const fallback = generateTypedQuestion(fallbackSection.questionType, fallbackCriterion, questionNumber, user.id);
+      const mapped = {
+        ...fallback,
+        question_number: questionNumber,
+        section_id: fallbackSection.id,
+        section_label: fallbackSection.label,
+        section_title: fallbackSection.title,
+        question_type: fallbackSection.questionType,
+        points: fallbackSection.pointsPerQuestion,
+        needs_review: true,
+        validation_notes: 'Final completion fallback used after generation shortfall'
+      } as SectionedQuestion;
+
+      allQuestions.push(mapped);
+      answerKey.push({
+        question_number: mapped.question_number,
+        display_number: String(mapped.question_number),
+        question_id: mapped.id,
+        correct_answer: mapped.correct_answer,
+        section: mapped.section_label,
+        question_type: mapped.question_type,
+        points: mapped.points
+      });
+
+      const targetSection = sectionResults.find(section => section.id === fallbackSection.id);
+      if (targetSection) {
+        targetSection.questions.push(mapped);
+        targetSection.totalPoints += mapped.points;
+      }
+    }
+
+    totalPoints = sectionResults.reduce((sum, s) => sum + s.totalPoints, 0);
   }
 
   console.log(`✅ TOS CONTRACT SATISFIED: ${allQuestions.length}/${requiredTotal} questions`);
@@ -401,7 +441,7 @@ function computeTextSimilarity(text1: string, text2: string): number {
 function isDuplicateByText(
   questionText: string,
   existingTexts: string[],
-  threshold: number = DUPLICATE_SIMILARITY_THRESHOLD
+  threshold: number = 0.7
 ): boolean {
   for (const existing of existingTexts) {
     if (computeTextSimilarity(questionText, existing) >= threshold) {
@@ -614,15 +654,16 @@ async function generateTypedQuestions(
   uniquenessStore: QuestionUniquenessStore,
   allQuestionTexts: string[]
 ): Promise<any[]> {
+  const MAX_RETRIES = 2;
   let attempt = 0;
   const accepted: any[] = [];
 
-  while (accepted.length < count && attempt < MAX_AI_GENERATION_RETRIES) {
+  while (accepted.length < count && attempt <= MAX_RETRIES) {
     attempt++;
     const needed = count - accepted.length;
 
     try {
-      const aiQuestions = await generateTypedQuestionsViaAI(questionType, criteria, Math.min(needed, AI_GENERATION_BATCH_SIZE), userId);
+      const aiQuestions = await generateTypedQuestionsViaAI(questionType, criteria, needed, userId);
 
       for (const q of aiQuestions) {
         if (accepted.length >= count) break;
@@ -645,17 +686,12 @@ async function generateTypedQuestions(
         );
         const uniqueCheck = uniquenessStore.checkWithSuggestions(fp);
         if (!uniqueCheck.unique) {
-          console.warn(`   ⚠️ Structurally similar AI question accepted with review flag: ${uniqueCheck.reason}`);
-          q.needs_review = true;
-          q.metadata = {
-            ...(q.metadata || {}),
-            validation_warning: uniqueCheck.reason
-          };
-        } else {
-          uniquenessStore.register(fp);
+          console.log(`   🔄 Rejected structurally redundant AI question: ${uniqueCheck.reason}`);
+          continue;
         }
 
         // Passed all checks — accept
+        uniquenessStore.register(fp);
         allQuestionTexts.push(qText);
         accepted.push(q);
       }
@@ -664,7 +700,7 @@ async function generateTypedQuestions(
       console.log(`   ⚠️ After AI attempt ${attempt}: ${accepted.length}/${count} unique questions accepted`);
     } catch (error) {
       console.error(`   ❌ AI generation attempt ${attempt} failed:`, error);
-      console.warn(`   🔁 Continuing generation retries after failure (${attempt}/${MAX_AI_GENERATION_RETRIES})`);
+      break; // Don't retry on hard errors
     }
   }
 

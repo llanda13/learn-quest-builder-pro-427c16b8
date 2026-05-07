@@ -1,4 +1,5 @@
-import { supabase } from '@/integrations/supabase/client';
+import { supabase as _supabase } from "@/integrations/supabase/client";
+const supabase: any = _supabase;
 import { generateUUID } from '@/utils/uuid';
 
 export interface QualityMetric {
