@@ -57,6 +57,9 @@ interface SubjectContext {
   description: string;
   technicalKeywords: string[];
   isTechnical: boolean;
+  // Transient — set per-batch so the SUBJECT ANCHOR can include item position and
+  // checkpoint reinforcement to prevent context exhaustion on long generations.
+  position?: { current: number; total: number; checkpoint?: boolean };
 }
 
 /**
@@ -102,18 +105,31 @@ function buildSubjectContext(
 }
 
 function renderSubjectAnchor(ctx: SubjectContext): string {
+  const position = ctx.position;
+  const positionLine = position
+    ? `\nITEM POSITION: items ${position.current}-${Math.min(position.current + 5, position.total)} of ${position.total}` +
+      (position.checkpoint
+        ? `\n🔄 CHECKPOINT REINFORCEMENT: ${position.current - 1} items already generated. RESET focus — next items MUST stay in the "${ctx.courseName}" technical domain. Do NOT drift to generic administrative, motherhood, or filler content. Do NOT repeat previously generated stems verbatim.`
+        : '')
+    : '';
   return `=== SUBJECT ANCHOR (RE-INJECTED EVERY BATCH — DO NOT DRIFT) ===
 COURSE CODE: ${ctx.subjectCode}
 COURSE NAME: ${ctx.courseName}
 COURSE DESCRIPTION: ${ctx.description || '(not provided)'}
 DOMAIN TYPE: ${ctx.isTechnical ? 'TECHNICAL — questions MUST use precise technical terminology, code/system concepts, and discipline-specific vocabulary' : 'THEORETICAL/GENERAL'}
 REQUIRED VOCABULARY (use at least 1-2 per question): ${ctx.technicalKeywords.join(', ') || '(none)'}
-PERSONA: You are a subject-matter expert teaching "${ctx.courseName}". Stay strictly within this course's scope. Do NOT produce generic, off-topic, or cross-subject content.
+PERSONA: You are a subject-matter expert teaching "${ctx.courseName}". Stay strictly within this course's scope. Do NOT produce generic, off-topic, or cross-subject content.${positionLine}
 === END SUBJECT ANCHOR ===`;
 }
 
-// Batch size for segmented generation — keeps AI context fresh and prevents drift
+// Batch size for segmented generation — keeps AI context fresh and prevents drift.
+// Technical subjects use a smaller batch so the subject anchor is re-injected more often,
+// preventing context exhaustion / "logic bleeding" on long (50+ item) generations.
 const AI_BATCH_SIZE = 6;
+const AI_BATCH_SIZE_TECHNICAL = 4;
+// After every N globally-emitted items, the next batch prompt includes an explicit
+// "checkpoint reinforcement" reminder of the technical persona.
+const PROMPT_REINJECTION_INTERVAL = 15;
 
 /**
  * SLOT: A predefined requirement from the TOS
@@ -856,17 +872,39 @@ async function fillSlotsWithAI(
   const MAX_BATCH_RETRIES = 2;       // retry the whole batch if the API call itself fails
   const MAX_PER_SLOT_RETRIES = 3;    // per-question regeneration when validation fails
 
+  // Dynamic batch size: technical subjects get smaller batches so the SUBJECT ANCHOR
+  // is re-injected more frequently — core fix for "context exhaustion" where the AI
+  // drifts to generic admin templates after the first ~30 items.
+  const batchSize = subjectCtx?.isTechnical ? AI_BATCH_SIZE_TECHNICAL : AI_BATCH_SIZE;
+
   let batchNumber = 0;
+  let globalItemPosition = 1;      // 1-indexed across the ENTIRE generation run
+  let lastCheckpointAt = 0;
+  const totalSlots = slots.length;
   const totalBatches = Array.from(groups.values())
-    .reduce((sum, gs) => sum + Math.ceil(gs.length / AI_BATCH_SIZE), 0);
+    .reduce((sum, gs) => sum + Math.ceil(gs.length / batchSize), 0);
 
   for (const [key, groupSlots] of groups) {
     const [topic, bloom, qType] = key.split('::');
 
-    for (let offset = 0; offset < groupSlots.length; offset += AI_BATCH_SIZE) {
+    for (let offset = 0; offset < groupSlots.length; offset += batchSize) {
       batchNumber++;
-      const batch = groupSlots.slice(offset, offset + AI_BATCH_SIZE);
-      console.log(`\n📦 Batch ${batchNumber}/${totalBatches} — topic="${topic}" bloom=${bloom} type=${qType} size=${batch.length}`);
+      const batch = groupSlots.slice(offset, offset + batchSize);
+
+      // Trigger a checkpoint reinforcement every PROMPT_REINJECTION_INTERVAL items
+      const crossedCheckpoint =
+        globalItemPosition - lastCheckpointAt >= PROMPT_REINJECTION_INTERVAL;
+      const position = {
+        current: globalItemPosition,
+        total: totalSlots,
+        checkpoint: crossedCheckpoint
+      };
+      if (crossedCheckpoint) {
+        lastCheckpointAt = globalItemPosition;
+        console.log(`   🔄 Checkpoint reinforcement at item ${globalItemPosition}/${totalSlots}`);
+      }
+
+      console.log(`\n📦 Batch ${batchNumber}/${totalBatches} — topic="${topic}" bloom=${bloom} type=${qType} size=${batch.length} (items ${globalItemPosition}-${globalItemPosition + batch.length - 1}/${totalSlots})`);
 
       // Build intents for this batch (subject anchor will be re-injected in the prompt)
       const intents = batch.map(slot => {
@@ -891,7 +929,7 @@ async function fillSlotsWithAI(
       for (let attempt = 1; attempt <= MAX_BATCH_RETRIES; attempt++) {
         try {
           batchQuestions = await generateQuestionsWithIntents(
-            topic, bloom, intents, aiApiKey, registry, subjectCtx
+            topic, bloom, intents, aiApiKey, registry, subjectCtx, position
           );
           batchError = null;
           break;
@@ -907,7 +945,7 @@ async function fillSlotsWithAI(
         const slot = batch[i];
         let candidate = batchQuestions[i];
         let rejection = candidate
-          ? getQuestionRejectionReason(candidate, slot)
+          ? getQuestionRejectionReason(candidate, slot, subjectCtx)
           : (batchError
               ? `Batch error: ${batchError instanceof Error ? batchError.message : String(batchError)}`
               : 'No question returned');
@@ -917,11 +955,13 @@ async function fillSlotsWithAI(
           perSlotAttempt++;
           console.warn(`   🔁 Slot ${slot.id} rejected (${rejection}) — regenerating ${perSlotAttempt}/${MAX_PER_SLOT_RETRIES}`);
           try {
+            // Force a checkpoint on every retry so the persona is re-anchored
             const single = await generateQuestionsWithIntents(
-              topic, bloom, [intents[i]], aiApiKey, registry, subjectCtx
+              topic, bloom, [intents[i]], aiApiKey, registry, subjectCtx,
+              { current: globalItemPosition + i, total: totalSlots, checkpoint: true }
             );
             candidate = single[0];
-            rejection = candidate ? getQuestionRejectionReason(candidate, slot) : 'Empty regeneration';
+            rejection = candidate ? getQuestionRejectionReason(candidate, slot, subjectCtx) : 'Empty regeneration';
           } catch (err) {
             rejection = `Regeneration error: ${err instanceof Error ? err.message : String(err)}`;
           }
@@ -941,6 +981,8 @@ async function fillSlotsWithAI(
         slot.source = 'ai';
         filledSlots.push(slot);
       }
+
+      globalItemPosition += batch.length;
     }
   }
 
@@ -957,7 +999,27 @@ function getTopicKeywords(topic: string): string[] {
     .filter(word => word.length >= 4 && !stopWords.has(word));
 }
 
-function getQuestionRejectionReason(question: any, slot: Slot): string | null {
+// Patterns that indicate the AI drifted to generic admin/template filler instead
+// of producing real subject content (the main failure mode for technical courses
+// after context exhaustion).
+const GENERIC_TEMPLATE_PATTERNS = [
+  /which (of the following|statement) (is|best) (true|correct|describes|defines)\??$/i,
+  /^(what|which) is the (main|primary|best) (purpose|goal|objective)\b.*\?$/i,
+  /^(what|which) is (the )?most (important|effective|appropriate)\b.*\?$/i,
+  /\b(administrative|policy|procedure|guideline|protocol)\b.*\b(used|applied|followed)\b/i,
+  /\bin general\b.*\b(important|useful|necessary)\b/i,
+];
+
+function isGenericTemplate(text: string): boolean {
+  const t = text.trim();
+  return GENERIC_TEMPLATE_PATTERNS.some(p => p.test(t));
+}
+
+function getQuestionRejectionReason(
+  question: any,
+  slot: Slot,
+  subjectCtx?: SubjectContext
+): string | null {
   if (!question) return 'Empty AI response for slot';
   const questionText = String(question.question_text || question.text || '').trim();
   if (questionText.length < 10) return 'Question text is missing or too short';
@@ -966,6 +1028,28 @@ function getQuestionRejectionReason(question: any, slot: Slot): string | null {
   const topicKeywords = getTopicKeywords(slot.topic);
   if (topicKeywords.length > 0 && !topicKeywords.some(keyword => lowerText.includes(keyword))) {
     return `Missing topic keyword for "${slot.topic}"`;
+  }
+
+  // For TECHNICAL subjects, also enforce technical-vocabulary presence and reject
+  // obvious generic-template stems (the main "context exhaustion" failure mode).
+  if (subjectCtx?.isTechnical) {
+    if (isGenericTemplate(questionText)) {
+      return 'Generic administrative/template stem (technical content required)';
+    }
+    const vocab = subjectCtx.technicalKeywords || [];
+    if (vocab.length > 0) {
+      const optionsText = (() => {
+        if (slot.questionType === 'mcq') {
+          const choices = question.choices || question.options;
+          if (!choices) return '';
+          return Object.values(choices).join(' ');
+        }
+        return String(question.correct_answer || question.answer || '');
+      })().toLowerCase();
+      const combined = `${lowerText} ${optionsText}`;
+      const hit = vocab.some(v => combined.includes(v.toLowerCase()));
+      if (!hit) return 'Missing required technical vocabulary for this course';
+    }
   }
 
   if (slot.questionType === 'mcq') {
@@ -1193,10 +1277,18 @@ async function generateQuestionsWithIntents(
   }>,
   apiKey: string,
   registry: GenerationRegistry,
-  subjectCtx?: SubjectContext
+  subjectCtx?: SubjectContext,
+  position?: { current: number; total: number; checkpoint?: boolean }
 ): Promise<any[]> {
   const normalizedBloom = bloom.charAt(0).toUpperCase() + bloom.slice(1).toLowerCase();
-  
+
+  // Inject the per-batch position into the SubjectContext so renderSubjectAnchor
+  // can include the checkpoint reinforcement line for technical subjects.
+  const ctxWithPos: SubjectContext | undefined = subjectCtx
+    ? { ...subjectCtx, position }
+    : undefined;
+  subjectCtx = ctxWithPos;
+
   // Group by question type for appropriate prompts
   const mcqIntents = intents.filter(i => i.questionType === 'mcq');
   const tfIntents = intents.filter(i => i.questionType === 'true_false');
