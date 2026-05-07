@@ -871,17 +871,39 @@ async function fillSlotsWithAI(
   const MAX_BATCH_RETRIES = 2;       // retry the whole batch if the API call itself fails
   const MAX_PER_SLOT_RETRIES = 3;    // per-question regeneration when validation fails
 
+  // Dynamic batch size: technical subjects get smaller batches so the SUBJECT ANCHOR
+  // is re-injected more frequently — core fix for "context exhaustion" where the AI
+  // drifts to generic admin templates after the first ~30 items.
+  const batchSize = subjectCtx?.isTechnical ? AI_BATCH_SIZE_TECHNICAL : AI_BATCH_SIZE;
+
   let batchNumber = 0;
+  let globalItemPosition = 1;      // 1-indexed across the ENTIRE generation run
+  let lastCheckpointAt = 0;
+  const totalSlots = slots.length;
   const totalBatches = Array.from(groups.values())
-    .reduce((sum, gs) => sum + Math.ceil(gs.length / AI_BATCH_SIZE), 0);
+    .reduce((sum, gs) => sum + Math.ceil(gs.length / batchSize), 0);
 
   for (const [key, groupSlots] of groups) {
     const [topic, bloom, qType] = key.split('::');
 
-    for (let offset = 0; offset < groupSlots.length; offset += AI_BATCH_SIZE) {
+    for (let offset = 0; offset < groupSlots.length; offset += batchSize) {
       batchNumber++;
-      const batch = groupSlots.slice(offset, offset + AI_BATCH_SIZE);
-      console.log(`\n📦 Batch ${batchNumber}/${totalBatches} — topic="${topic}" bloom=${bloom} type=${qType} size=${batch.length}`);
+      const batch = groupSlots.slice(offset, offset + batchSize);
+
+      // Trigger a checkpoint reinforcement every PROMPT_REINJECTION_INTERVAL items
+      const crossedCheckpoint =
+        globalItemPosition - lastCheckpointAt >= PROMPT_REINJECTION_INTERVAL;
+      const position = {
+        current: globalItemPosition,
+        total: totalSlots,
+        checkpoint: crossedCheckpoint
+      };
+      if (crossedCheckpoint) {
+        lastCheckpointAt = globalItemPosition;
+        console.log(`   🔄 Checkpoint reinforcement at item ${globalItemPosition}/${totalSlots}`);
+      }
+
+      console.log(`\n📦 Batch ${batchNumber}/${totalBatches} — topic="${topic}" bloom=${bloom} type=${qType} size=${batch.length} (items ${globalItemPosition}-${globalItemPosition + batch.length - 1}/${totalSlots})`);
 
       // Build intents for this batch (subject anchor will be re-injected in the prompt)
       const intents = batch.map(slot => {
@@ -906,7 +928,7 @@ async function fillSlotsWithAI(
       for (let attempt = 1; attempt <= MAX_BATCH_RETRIES; attempt++) {
         try {
           batchQuestions = await generateQuestionsWithIntents(
-            topic, bloom, intents, aiApiKey, registry, subjectCtx
+            topic, bloom, intents, aiApiKey, registry, subjectCtx, position
           );
           batchError = null;
           break;
@@ -922,7 +944,7 @@ async function fillSlotsWithAI(
         const slot = batch[i];
         let candidate = batchQuestions[i];
         let rejection = candidate
-          ? getQuestionRejectionReason(candidate, slot)
+          ? getQuestionRejectionReason(candidate, slot, subjectCtx)
           : (batchError
               ? `Batch error: ${batchError instanceof Error ? batchError.message : String(batchError)}`
               : 'No question returned');
@@ -932,11 +954,13 @@ async function fillSlotsWithAI(
           perSlotAttempt++;
           console.warn(`   🔁 Slot ${slot.id} rejected (${rejection}) — regenerating ${perSlotAttempt}/${MAX_PER_SLOT_RETRIES}`);
           try {
+            // Force a checkpoint on every retry so the persona is re-anchored
             const single = await generateQuestionsWithIntents(
-              topic, bloom, [intents[i]], aiApiKey, registry, subjectCtx
+              topic, bloom, [intents[i]], aiApiKey, registry, subjectCtx,
+              { current: globalItemPosition + i, total: totalSlots, checkpoint: true }
             );
             candidate = single[0];
-            rejection = candidate ? getQuestionRejectionReason(candidate, slot) : 'Empty regeneration';
+            rejection = candidate ? getQuestionRejectionReason(candidate, slot, subjectCtx) : 'Empty regeneration';
           } catch (err) {
             rejection = `Regeneration error: ${err instanceof Error ? err.message : String(err)}`;
           }
@@ -956,6 +980,8 @@ async function fillSlotsWithAI(
         slot.source = 'ai';
         filledSlots.push(slot);
       }
+
+      globalItemPosition += batch.length;
     }
   }
 
