@@ -311,8 +311,13 @@ Deno.serve(async (req) => {
         errorMessage = "Lovable AI is rate limited right now. Please try again in a moment.";
       }
 
-      return new Response(JSON.stringify({ error: errorMessage, details: errorText }), {
-        status: aiResponse.status >= 400 && aiResponse.status < 600 ? aiResponse.status : 500,
+      return new Response(JSON.stringify({
+        success: false,
+        error: errorMessage,
+        code: aiResponse.status === 402 ? "AI_CREDITS_REQUIRED" : "AI_REQUEST_FAILED",
+        details: errorText,
+      }), {
+        status: aiResponse.status === 402 ? 200 : (aiResponse.status >= 400 && aiResponse.status < 600 ? aiResponse.status : 500),
         headers: { ...corsHeaders, "Content-Type": "application/json" },
       });
     }
