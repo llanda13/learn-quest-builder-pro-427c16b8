@@ -45,23 +45,33 @@ export function TOSUploadParser({ onParsed }: TOSUploadParserProps) {
       const { data: { session } } = await supabase.auth.getSession();
       
       const response = await fetch(
-        `https://lohmzywgbkntvpuygvfx.supabase.co/functions/v1/parse-tos-document`,
+        `${import.meta.env.VITE_SUPABASE_URL}/functions/v1/parse-tos-document`,
         {
           method: "POST",
           headers: {
             Authorization: `Bearer ${session?.access_token || ""}`,
-            apikey: "eyJhbGciOiJIUzI1NiIsInR5cCI6IkpXVCJ9.eyJpc3MiOiJzdXBhYmFzZSIsInJlZiI6ImxvaG16eXdnYmtudHZwdXlndmZ4Iiwicm9sZSI6ImFub24iLCJpYXQiOjE3NTI0MjYyNDUsImV4cCI6MjA2ODAwMjI0NX0.FCiA9ps4QYto38P0-sZcNcR3YtOJba9GV3PGeMwKuds",
+            apikey: import.meta.env.VITE_SUPABASE_PUBLISHABLE_KEY,
           },
           body: formData,
         }
       );
 
-      if (!response.ok) {
-        const errorData = await response.json().catch(() => ({ error: "Unknown error" }));
-        throw new Error(errorData.error || `Server error: ${response.status}`);
+      const responseData = await response.json().catch(() => ({ error: "Unknown error" }));
+      const errorText = `${responseData?.error || ""} ${responseData?.details || ""}`;
+
+      if (response.status === 402 || responseData?.code === "AI_CREDITS_REQUIRED" || /credits|required|payment_required|not enough credits/i.test(errorText)) {
+        toast.error("AI credits required", {
+          description: "Please add Lovable AI balance, then upload the TOS again. You can still fill in the TOS manually.",
+          duration: 8000,
+        });
+        return;
       }
 
-      const parsed: ParsedTOSData = await response.json();
+      if (!response.ok) {
+        throw new Error(responseData.error || `Server error: ${response.status}`);
+      }
+
+      const parsed: ParsedTOSData = responseData;
 
       // Open review dialog instead of directly applying
       setReviewData(parsed);
