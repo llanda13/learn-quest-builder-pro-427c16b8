@@ -104,14 +104,12 @@ function buildSubjectContext(
   };
 }
 
-function renderSubjectAnchor(
-  ctx: SubjectContext,
-  position?: { current: number; total: number; checkpoint?: boolean }
-): string {
+function renderSubjectAnchor(ctx: SubjectContext): string {
+  const position = ctx.position;
   const positionLine = position
-    ? `\nITEM POSITION: generating items ${position.current}-${Math.min(position.current + 5, position.total)} of ${position.total}` +
+    ? `\nITEM POSITION: items ${position.current}-${Math.min(position.current + 5, position.total)} of ${position.total}` +
       (position.checkpoint
-        ? `\n🔄 CHECKPOINT REINFORCEMENT: You have generated ${position.current - 1} items. RESET your focus — the next items MUST remain in the "${ctx.courseName}" technical domain. Do NOT drift to generic administrative, motherhood, or filler content.`
+        ? `\n🔄 CHECKPOINT REINFORCEMENT: ${position.current - 1} items already generated. RESET focus — next items MUST stay in the "${ctx.courseName}" technical domain. Do NOT drift to generic administrative, motherhood, or filler content. Do NOT repeat previously generated stems verbatim.`
         : '')
     : '';
   return `=== SUBJECT ANCHOR (RE-INJECTED EVERY BATCH — DO NOT DRIFT) ===
