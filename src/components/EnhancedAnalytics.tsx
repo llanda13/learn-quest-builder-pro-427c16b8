@@ -51,7 +51,7 @@ export default function EnhancedAnalytics({ onBack }: EnhancedAnalyticsProps) {
       ]);
 
       // Process analytics data
-      const analytics = processAnalyticsData(questionsData, tosData, statsData);
+      const analytics = processAnalyticsData(questionsData as any[], tosData as any[], statsData as any);
       setAnalyticsData(analytics);
     } catch (error) {
       toast({
