@@ -999,7 +999,27 @@ function getTopicKeywords(topic: string): string[] {
     .filter(word => word.length >= 4 && !stopWords.has(word));
 }
 
-function getQuestionRejectionReason(question: any, slot: Slot): string | null {
+// Patterns that indicate the AI drifted to generic admin/template filler instead
+// of producing real subject content (the main failure mode for technical courses
+// after context exhaustion).
+const GENERIC_TEMPLATE_PATTERNS = [
+  /which (of the following|statement) (is|best) (true|correct|describes|defines)\??$/i,
+  /^(what|which) is the (main|primary|best) (purpose|goal|objective)\b.*\?$/i,
+  /^(what|which) is (the )?most (important|effective|appropriate)\b.*\?$/i,
+  /\b(administrative|policy|procedure|guideline|protocol)\b.*\b(used|applied|followed)\b/i,
+  /\bin general\b.*\b(important|useful|necessary)\b/i,
+];
+
+function isGenericTemplate(text: string): boolean {
+  const t = text.trim();
+  return GENERIC_TEMPLATE_PATTERNS.some(p => p.test(t));
+}
+
+function getQuestionRejectionReason(
+  question: any,
+  slot: Slot,
+  subjectCtx?: SubjectContext
+): string | null {
   if (!question) return 'Empty AI response for slot';
   const questionText = String(question.question_text || question.text || '').trim();
   if (questionText.length < 10) return 'Question text is missing or too short';
@@ -1008,6 +1028,28 @@ function getQuestionRejectionReason(question: any, slot: Slot): string | null {
   const topicKeywords = getTopicKeywords(slot.topic);
   if (topicKeywords.length > 0 && !topicKeywords.some(keyword => lowerText.includes(keyword))) {
     return `Missing topic keyword for "${slot.topic}"`;
+  }
+
+  // For TECHNICAL subjects, also enforce technical-vocabulary presence and reject
+  // obvious generic-template stems (the main "context exhaustion" failure mode).
+  if (subjectCtx?.isTechnical) {
+    if (isGenericTemplate(questionText)) {
+      return 'Generic administrative/template stem (technical content required)';
+    }
+    const vocab = subjectCtx.technicalKeywords || [];
+    if (vocab.length > 0) {
+      const optionsText = (() => {
+        if (slot.questionType === 'mcq') {
+          const choices = question.choices || question.options;
+          if (!choices) return '';
+          return Object.values(choices).join(' ');
+        }
+        return String(question.correct_answer || question.answer || '');
+      })().toLowerCase();
+      const combined = `${lowerText} ${optionsText}`;
+      const hit = vocab.some(v => combined.includes(v.toLowerCase()));
+      if (!hit) return 'Missing required technical vocabulary for this course';
+    }
   }
 
   if (slot.questionType === 'mcq') {
