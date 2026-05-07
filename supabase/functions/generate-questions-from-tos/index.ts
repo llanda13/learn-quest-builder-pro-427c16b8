@@ -101,19 +101,34 @@ function buildSubjectContext(
   };
 }
 
-function renderSubjectAnchor(ctx: SubjectContext): string {
+function renderSubjectAnchor(
+  ctx: SubjectContext,
+  position?: { current: number; total: number; checkpoint?: boolean }
+): string {
+  const positionLine = position
+    ? `\nITEM POSITION: generating items ${position.current}-${Math.min(position.current + 5, position.total)} of ${position.total}` +
+      (position.checkpoint
+        ? `\n🔄 CHECKPOINT REINFORCEMENT: You have generated ${position.current - 1} items. RESET your focus — the next items MUST remain in the "${ctx.courseName}" technical domain. Do NOT drift to generic administrative, motherhood, or filler content.`
+        : '')
+    : '';
   return `=== SUBJECT ANCHOR (RE-INJECTED EVERY BATCH — DO NOT DRIFT) ===
 COURSE CODE: ${ctx.subjectCode}
 COURSE NAME: ${ctx.courseName}
 COURSE DESCRIPTION: ${ctx.description || '(not provided)'}
 DOMAIN TYPE: ${ctx.isTechnical ? 'TECHNICAL — questions MUST use precise technical terminology, code/system concepts, and discipline-specific vocabulary' : 'THEORETICAL/GENERAL'}
 REQUIRED VOCABULARY (use at least 1-2 per question): ${ctx.technicalKeywords.join(', ') || '(none)'}
-PERSONA: You are a subject-matter expert teaching "${ctx.courseName}". Stay strictly within this course's scope. Do NOT produce generic, off-topic, or cross-subject content.
+PERSONA: You are a subject-matter expert teaching "${ctx.courseName}". Stay strictly within this course's scope. Do NOT produce generic, off-topic, or cross-subject content.${positionLine}
 === END SUBJECT ANCHOR ===`;
 }
 
-// Batch size for segmented generation — keeps AI context fresh and prevents drift
+// Batch size for segmented generation — keeps AI context fresh and prevents drift.
+// Technical subjects use a smaller batch so the subject anchor is re-injected more often,
+// preventing context exhaustion / "logic bleeding" on long (50+ item) generations.
 const AI_BATCH_SIZE = 6;
+const AI_BATCH_SIZE_TECHNICAL = 4;
+// After every N globally-emitted items, the next batch prompt includes an explicit
+// "checkpoint reinforcement" reminder of the technical persona.
+const PROMPT_REINJECTION_INTERVAL = 15;
 
 /**
  * SLOT: A predefined requirement from the TOS
