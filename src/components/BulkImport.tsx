@@ -100,7 +100,8 @@ export default function BulkImport({
   const [errors, setErrors] = useState<string[]>([]);
   const [previewData, setPreviewData] = useState<any[]>(() => readJSON<any[]>(BI_KEYS.preview, []));
   const [showPreview, setShowPreview] = useState(false);
-  const [selectedTopic, setSelectedTopic] = useState<string>(() => readJSON<string>(BI_KEYS.topic, 'General'));
+  const [selectedCategory, setSelectedCategory] = useState<string>(() => readJSON<string>(BI_KEYS.category, ''));
+  const [selectedSpecialization, setSelectedSpecialization] = useState<string>(() => readJSON<string>(BI_KEYS.specialization, ''));
   const [classificationResults, setClassificationResults] = useState<any[]>([]);
   const [showClassificationDetails, setShowClassificationDetails] = useState(false);
   
