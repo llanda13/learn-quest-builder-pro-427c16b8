@@ -543,7 +543,7 @@ export default function BulkImport({
           Question: para.trim().substring(0, 500),
           Type: 'short_answer',
           Correct: '',
-          Topic: globalMeta.topic || selectedTopic || 'General',
+          Topic: globalMeta.topic || '',
           Category: globalMeta.category || '',
           Specialization: globalMeta.specialization || '',
           SubjectCode: globalMeta.subject_code || '',
