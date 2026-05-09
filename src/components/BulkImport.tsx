@@ -879,49 +879,67 @@ export default function BulkImport({
         });
       }
 
-      // ===== AUTO TOPIC ASSIGNMENT =====
+      // ===== AI-DRIVEN TOPIC IDENTIFICATION =====
+      // Replaces manual "Topic Assignment". The AI infers a SPECIFIC lesson /
+      // sub-topic per question based on question content + subject context +
+      // selected specialization, instead of repeating the subject description.
       setProgress(72);
-      setCurrentStep('Assigning topics from Question Bank...');
+      setCurrentStep('Identifying specific lesson topics with AI...');
+      try {
+        // Group questions by (subject_code, subject_description, specialization, category)
+        // so the AI gets a coherent context per batch.
+        const groups = new Map<string, { ctx: any; items: { idx: number; q: ParsedQuestion }[] }>();
+        deduplicatedData.forEach((q, idx) => {
+          const ctx = {
+            category: q.category || selectedCategory || '',
+            specialization: q.specialization || selectedSpecialization || '',
+            subject_code: q.subject_code || '',
+            subject_description: q.subject_description || '',
+          };
+          const key = JSON.stringify(ctx);
+          if (!groups.has(key)) groups.set(key, { ctx, items: [] });
+          groups.get(key)!.items.push({ idx, q });
+        });
 
-      if (existingTopics.length > 0) {
-        const topicTokensMap = existingTopics.map(t => ({
-          topic: t,
-          tokens: new Set(t.toLowerCase().replace(/[^\w\s]/g, '').split(/\s+/).filter(w => w.length > 2)),
-        }));
-
-        deduplicatedData.forEach((q) => {
-          // Skip if topic is already meaningfully assigned (not 'General' or empty)
-          if (q.topic && q.topic !== 'General' && q.topic !== selectedTopic) return;
-
-          const qTokens = q.question_text.toLowerCase().replace(/[^\w\s]/g, '').split(/\s+/).filter(w => w.length > 2);
-          const qSet = new Set(qTokens);
-
-          let bestTopic = '';
-          let bestScore = 0;
-
-          for (const { topic, tokens } of topicTokensMap) {
-            if (tokens.size === 0) continue;
-            // Jaccard-like overlap
-            let overlap = 0;
-            for (const token of tokens) {
-              if (qSet.has(token)) overlap++;
-            }
-            const score = overlap / Math.max(tokens.size, 1);
-            if (score > bestScore && score >= 0.3) {
-              bestScore = score;
-              bestTopic = topic;
-            }
+        let identifiedCount = 0;
+        for (const { ctx, items } of groups.values()) {
+          const { data, error } = await supabase.functions.invoke('identify-question-topics', {
+            body: {
+              questions: items.map(({ q }) => ({ question_text: q.question_text })),
+              ...ctx,
+              existing_topics: existingTopics,
+            },
+          });
+          if (error) {
+            console.warn('Topic identification failed for group:', error);
+            continue;
           }
+          const topics: string[] = (data?.topics || []) as string[];
+          items.forEach(({ idx }, i) => {
+            const t = (topics[i] || '').trim();
+            const subjDesc = (deduplicatedData[idx].subject_description || '').trim().toLowerCase();
+            // Reject empty topics OR topics that just echo the subject description
+            if (t && t.toLowerCase() !== subjDesc) {
+              deduplicatedData[idx].topic = t;
+              identifiedCount++;
+            }
+          });
+        }
 
-          if (bestTopic) {
-            q.topic = bestTopic;
+        // Final fallback: any question still without a topic gets flagged for review
+        deduplicatedData.forEach((q) => {
+          if (!q.topic || q.topic === 'General') {
+            q.topic = q.topic || 'Unclassified';
+            q.needs_review = true;
           }
         });
-        
-        const assignedCount = deduplicatedData.filter(q => q.topic !== 'General' && q.topic !== selectedTopic).length;
-        if (assignedCount > 0) {
-          toast.info(`Auto-assigned topics to ${assignedCount} questions from Question Bank`);
+
+        if (identifiedCount > 0) {
+          toast.info(`AI identified specific lesson topics for ${identifiedCount} question${identifiedCount === 1 ? '' : 's'}`);
         }
+      } catch (topicErr) {
+        console.warn('AI topic identification unavailable:', topicErr);
+        toast.info('AI topic identification unavailable — please verify topics manually.');
       }
 
       setProgress(78);
