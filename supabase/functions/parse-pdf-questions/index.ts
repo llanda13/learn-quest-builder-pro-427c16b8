@@ -53,18 +53,27 @@ serve(async (req) => {
       ? `\n\nDocument metadata: ${JSON.stringify(metadata)}`
       : '';
 
-    const systemPrompt = `You are a precise academic question parser. Your job is to extract structured multiple-choice and other question types from raw PDF text.
+    const systemPrompt = `You are a precise academic question parser. Your job is to extract structured multiple-choice and other question types from raw PDF text, AND assign each question a SPECIFIC LESSON / SUB-TOPIC.
 
-RULES:
+EXTRACTION RULES:
 1. Extract ONLY actual questions - ignore headers, metadata labels, instructions, page numbers, footers.
-2. For each question, extract: the question text (clean, no numbering prefixes), all answer choices (A, B, C, D), the correct answer letter if indicated, and the question type.
+2. For each question, extract: clean question text (no numbering prefixes), all answer choices (A, B, C, D), the correct answer letter if indicated, and the question type.
 3. Question types: "mcq" (has A-D choices), "true_false" (True/False options), "essay" (long-form), "short_answer" (brief answer needed).
 4. Do NOT include numbering like "Q1.", "1.", "(Q1)" in question_text - strip all prefixes.
 5. If the correct answer is marked with *, ✓, "Answer: X", or bold formatting, capture it.
 6. If no correct answer is identifiable, set correct_answer to empty string "".
 7. Lines like "Category:", "Subject Code:", "Cognitive Level:", "Points Value:" are metadata - do NOT treat as questions.
-8. If a question spans multiple lines or is split across pages, reconstruct it as a single coherent question.
-9. For choices that span multiple lines, reconstruct them properly.${topicContext}${metaContext}
+8. Reconstruct multi-line questions / choices into single coherent strings.
+
+TOPIC RULES (CRITICAL):
+- The "topic" field MUST describe the SPECIFIC LESSON or COMPETENCY the question covers — NOT the subject title.
+  BAD: "Life and Works of Rizal", "Introduction to Computing", "Multimedia"
+  GOOD: "RA 1425 Rizal Law", "Noli Me Tangere", "Rizal's Childhood",
+        "Variables and Data Types", "For Loops", "Image File Formats", "Color Theory"
+- Stay strictly within the provided Specialization / Subject context. Never assign topics from other specializations.
+- 2–6 words, Title Case, no trailing punctuation.
+- If an existing topic from the provided list closely matches, REUSE the exact existing string.
+- If you genuinely cannot determine a specific lesson, return "" — never echo the subject description.${topicContext}${metaContext}
 
 Return a JSON object with this exact structure:
 {
@@ -76,7 +85,7 @@ Return a JSON object with this exact structure:
       "correct_answer": "B",
       "bloom_level": "",
       "difficulty": "",
-      "topic": "matched topic or empty string"
+      "topic": "specific lesson / competency, NOT the subject title"
     }
   ],
   "detected_metadata": {
