@@ -639,8 +639,11 @@ export default function BulkImport({
     const csvSubjectCode = row.SubjectCode || row.subject_code || row['Subject Code'] || '';
     const csvSubjectDescription = row.SubjectDescription || row.subject_description || row['Subject Description'] || '';
 
-    // Topic defaults: use subject description, then 'General'
-    const finalTopic = topic.trim() || csvSubjectDescription.trim() || 'General';
+    // Topic intentionally left empty when not provided — the AI topic
+    // identifier will fill in a SPECIFIC lesson/competency based on
+    // the question content + subject context. We never default to the
+    // subject description (which would just repeat the subject title).
+    const finalTopic = topic.trim();
 
     return {
       topic: finalTopic,
@@ -664,8 +667,10 @@ export default function BulkImport({
       grade_level: row['Grade Level'] || row.grade_level || undefined,
       term: row.Term || row.term || undefined,
       tags: row.Tags ? (Array.isArray(row.Tags) ? row.Tags : String(row.Tags).split(',').map((t: string) => t.trim())) : undefined,
-      category: csvCategory.trim() || undefined,
-      specialization: csvSpecialization.trim() || undefined,
+      // Fall back to admin-selected specialization assignment when the row/PDF
+      // didn't supply category or specialization. This anchors AI topic inference.
+      category: (csvCategory.trim() || selectedCategory || '') || undefined,
+      specialization: (csvSpecialization.trim() || selectedSpecialization || '') || undefined,
       subject_code: csvSubjectCode.trim() || undefined,
       subject_description: csvSubjectDescription.trim() || undefined,
     };
