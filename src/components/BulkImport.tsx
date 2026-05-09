@@ -394,7 +394,12 @@ export default function BulkImport({
         body: {
           raw_text: rawText,
           existing_topics: existingTopics,
-          metadata: extractPDFMetadata(rawText),
+          metadata: {
+            ...extractPDFMetadata(rawText),
+            // User-selected specialization context anchors AI topic inference
+            ...(selectedCategory ? { category: selectedCategory } : {}),
+            ...(selectedSpecialization ? { specialization: selectedSpecialization } : {}),
+          },
         },
       });
 
