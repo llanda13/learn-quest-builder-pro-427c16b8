@@ -1252,7 +1252,7 @@ export default function BulkImport({
         </CardHeader>
         <CardContent>
           <p className="text-sm text-muted-foreground mb-2">
-            Download our CSV template to ensure your data is formatted correctly. The template includes columns for <strong>Category</strong>, <strong>Specialization</strong>, <strong>Subject Code</strong>, and <strong>Subject Description</strong>. <strong>Topic</strong> is optional and will default to Subject Description if not provided.
+            Download our CSV template to ensure your data is formatted correctly. The template includes columns for <strong>Category</strong>, <strong>Specialization</strong>, <strong>Subject Code</strong>, and <strong>Subject Description</strong>. <strong>Topic</strong> is optional — when omitted, the AI will detect the specific lesson/competency for each question automatically based on the question content and specialization context.
           </p>
           <Button onClick={downloadTemplate} variant="outline">
             <Download className="h-4 w-4 mr-2" />
