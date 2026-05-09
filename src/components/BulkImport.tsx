@@ -26,7 +26,8 @@ const BI_KEYS = {
   preview: 'bulk-import.preview-data',
   verification: 'bulk-import.verification-data',
   step: 'bulk-import.step',
-  topic: 'bulk-import.selected-topic',
+  category: 'bulk-import.selected-category',
+  specialization: 'bulk-import.selected-specialization',
 } as const;
 
 const readJSON = <T,>(key: string, fallback: T): T => {
