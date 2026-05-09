@@ -232,7 +232,8 @@ export default function BulkImport({
   useEffect(() => { const t = setTimeout(() => writeJSON(BI_KEYS.preview, previewData), 300); return () => clearTimeout(t); }, [previewData]);
   useEffect(() => { const t = setTimeout(() => writeJSON(BI_KEYS.verification, verificationData), 300); return () => clearTimeout(t); }, [verificationData]);
   useEffect(() => { writeJSON(BI_KEYS.step, importStep); }, [importStep]);
-  useEffect(() => { writeJSON(BI_KEYS.topic, selectedTopic); }, [selectedTopic]);
+  useEffect(() => { writeJSON(BI_KEYS.category, selectedCategory); }, [selectedCategory]);
+  useEffect(() => { writeJSON(BI_KEYS.specialization, selectedSpecialization); }, [selectedSpecialization]);
 
   const { batchClassify, buildTaxonomyMatrix } = useTaxonomyClassification({
     useMLClassifier: true,
