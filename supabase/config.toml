@@ -47,3 +47,6 @@ verify_jwt = false
 
 [functions.parse-pdf-questions]
 verify_jwt = false
+
+[functions.identify-question-topics]
+verify_jwt = false

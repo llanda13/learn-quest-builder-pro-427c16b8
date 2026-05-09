@@ -26,7 +26,8 @@ const BI_KEYS = {
   preview: 'bulk-import.preview-data',
   verification: 'bulk-import.verification-data',
   step: 'bulk-import.step',
-  topic: 'bulk-import.selected-topic',
+  category: 'bulk-import.selected-category',
+  specialization: 'bulk-import.selected-specialization',
 } as const;
 
 const readJSON = <T,>(key: string, fallback: T): T => {
@@ -99,7 +100,8 @@ export default function BulkImport({
   const [errors, setErrors] = useState<string[]>([]);
   const [previewData, setPreviewData] = useState<any[]>(() => readJSON<any[]>(BI_KEYS.preview, []));
   const [showPreview, setShowPreview] = useState(false);
-  const [selectedTopic, setSelectedTopic] = useState<string>(() => readJSON<string>(BI_KEYS.topic, 'General'));
+  const [selectedCategory, setSelectedCategory] = useState<string>(() => readJSON<string>(BI_KEYS.category, ''));
+  const [selectedSpecialization, setSelectedSpecialization] = useState<string>(() => readJSON<string>(BI_KEYS.specialization, ''));
   const [classificationResults, setClassificationResults] = useState<any[]>([]);
   const [showClassificationDetails, setShowClassificationDetails] = useState(false);
   
@@ -230,7 +232,8 @@ export default function BulkImport({
   useEffect(() => { const t = setTimeout(() => writeJSON(BI_KEYS.preview, previewData), 300); return () => clearTimeout(t); }, [previewData]);
   useEffect(() => { const t = setTimeout(() => writeJSON(BI_KEYS.verification, verificationData), 300); return () => clearTimeout(t); }, [verificationData]);
   useEffect(() => { writeJSON(BI_KEYS.step, importStep); }, [importStep]);
-  useEffect(() => { writeJSON(BI_KEYS.topic, selectedTopic); }, [selectedTopic]);
+  useEffect(() => { writeJSON(BI_KEYS.category, selectedCategory); }, [selectedCategory]);
+  useEffect(() => { writeJSON(BI_KEYS.specialization, selectedSpecialization); }, [selectedSpecialization]);
 
   const { batchClassify, buildTaxonomyMatrix } = useTaxonomyClassification({
     useMLClassifier: true,
@@ -391,7 +394,12 @@ export default function BulkImport({
         body: {
           raw_text: rawText,
           existing_topics: existingTopics,
-          metadata: extractPDFMetadata(rawText),
+          metadata: {
+            ...extractPDFMetadata(rawText),
+            // User-selected specialization context anchors AI topic inference
+            ...(selectedCategory ? { category: selectedCategory } : {}),
+            ...(selectedSpecialization ? { specialization: selectedSpecialization } : {}),
+          },
         },
       });
 
@@ -483,7 +491,7 @@ export default function BulkImport({
         Type: questionType,
         ...(choiceCount > 0 ? choices : {}),
         Correct: validatedAnswer,
-        Topic: globalMeta.topic || selectedTopic || 'General',
+        Topic: globalMeta.topic || '',
         Category: globalMeta.category || '',
         Specialization: globalMeta.specialization || '',
         SubjectCode: globalMeta.subject_code || '',
@@ -511,7 +519,7 @@ export default function BulkImport({
             Type: q.question_type || 'mcq',
             ...(q.choices || {}),
             Correct: q.correct_answer || '',
-            Topic: q.topic || metadata.subject_description || selectedTopic || 'General',
+            Topic: q.topic || '',
             Bloom: q.bloom_level || '',
             Difficulty: q.difficulty || '',
             Category: metadata.category || '',
@@ -540,7 +548,7 @@ export default function BulkImport({
           Question: para.trim().substring(0, 500),
           Type: 'short_answer',
           Correct: '',
-          Topic: globalMeta.topic || selectedTopic || 'General',
+          Topic: globalMeta.topic || '',
           Category: globalMeta.category || '',
           Specialization: globalMeta.specialization || '',
           SubjectCode: globalMeta.subject_code || '',
@@ -631,8 +639,11 @@ export default function BulkImport({
     const csvSubjectCode = row.SubjectCode || row.subject_code || row['Subject Code'] || '';
     const csvSubjectDescription = row.SubjectDescription || row.subject_description || row['Subject Description'] || '';
 
-    // Topic defaults: use subject description, then 'General'
-    const finalTopic = topic.trim() || csvSubjectDescription.trim() || 'General';
+    // Topic intentionally left empty when not provided — the AI topic
+    // identifier will fill in a SPECIFIC lesson/competency based on
+    // the question content + subject context. We never default to the
+    // subject description (which would just repeat the subject title).
+    const finalTopic = topic.trim();
 
     return {
       topic: finalTopic,
@@ -656,8 +667,10 @@ export default function BulkImport({
       grade_level: row['Grade Level'] || row.grade_level || undefined,
       term: row.Term || row.term || undefined,
       tags: row.Tags ? (Array.isArray(row.Tags) ? row.Tags : String(row.Tags).split(',').map((t: string) => t.trim())) : undefined,
-      category: csvCategory.trim() || undefined,
-      specialization: csvSpecialization.trim() || undefined,
+      // Fall back to admin-selected specialization assignment when the row/PDF
+      // didn't supply category or specialization. This anchors AI topic inference.
+      category: (csvCategory.trim() || selectedCategory || '') || undefined,
+      specialization: (csvSpecialization.trim() || selectedSpecialization || '') || undefined,
       subject_code: csvSubjectCode.trim() || undefined,
       subject_description: csvSubjectDescription.trim() || undefined,
     };
@@ -876,49 +889,67 @@ export default function BulkImport({
         });
       }
 
-      // ===== AUTO TOPIC ASSIGNMENT =====
+      // ===== AI-DRIVEN TOPIC IDENTIFICATION =====
+      // Replaces manual "Topic Assignment". The AI infers a SPECIFIC lesson /
+      // sub-topic per question based on question content + subject context +
+      // selected specialization, instead of repeating the subject description.
       setProgress(72);
-      setCurrentStep('Assigning topics from Question Bank...');
+      setCurrentStep('Identifying specific lesson topics with AI...');
+      try {
+        // Group questions by (subject_code, subject_description, specialization, category)
+        // so the AI gets a coherent context per batch.
+        const groups = new Map<string, { ctx: any; items: { idx: number; q: ParsedQuestion }[] }>();
+        deduplicatedData.forEach((q, idx) => {
+          const ctx = {
+            category: q.category || selectedCategory || '',
+            specialization: q.specialization || selectedSpecialization || '',
+            subject_code: q.subject_code || '',
+            subject_description: q.subject_description || '',
+          };
+          const key = JSON.stringify(ctx);
+          if (!groups.has(key)) groups.set(key, { ctx, items: [] });
+          groups.get(key)!.items.push({ idx, q });
+        });
 
-      if (existingTopics.length > 0) {
-        const topicTokensMap = existingTopics.map(t => ({
-          topic: t,
-          tokens: new Set(t.toLowerCase().replace(/[^\w\s]/g, '').split(/\s+/).filter(w => w.length > 2)),
-        }));
-
-        deduplicatedData.forEach((q) => {
-          // Skip if topic is already meaningfully assigned (not 'General' or empty)
-          if (q.topic && q.topic !== 'General' && q.topic !== selectedTopic) return;
-
-          const qTokens = q.question_text.toLowerCase().replace(/[^\w\s]/g, '').split(/\s+/).filter(w => w.length > 2);
-          const qSet = new Set(qTokens);
-
-          let bestTopic = '';
-          let bestScore = 0;
-
-          for (const { topic, tokens } of topicTokensMap) {
-            if (tokens.size === 0) continue;
-            // Jaccard-like overlap
-            let overlap = 0;
-            for (const token of tokens) {
-              if (qSet.has(token)) overlap++;
-            }
-            const score = overlap / Math.max(tokens.size, 1);
-            if (score > bestScore && score >= 0.3) {
-              bestScore = score;
-              bestTopic = topic;
-            }
+        let identifiedCount = 0;
+        for (const { ctx, items } of groups.values()) {
+          const { data, error } = await supabase.functions.invoke('identify-question-topics', {
+            body: {
+              questions: items.map(({ q }) => ({ question_text: q.question_text })),
+              ...ctx,
+              existing_topics: existingTopics,
+            },
+          });
+          if (error) {
+            console.warn('Topic identification failed for group:', error);
+            continue;
           }
+          const topics: string[] = (data?.topics || []) as string[];
+          items.forEach(({ idx }, i) => {
+            const t = (topics[i] || '').trim();
+            const subjDesc = (deduplicatedData[idx].subject_description || '').trim().toLowerCase();
+            // Reject empty topics OR topics that just echo the subject description
+            if (t && t.toLowerCase() !== subjDesc) {
+              deduplicatedData[idx].topic = t;
+              identifiedCount++;
+            }
+          });
+        }
 
-          if (bestTopic) {
-            q.topic = bestTopic;
+        // Final fallback: any question still without a topic gets flagged for review
+        deduplicatedData.forEach((q) => {
+          if (!q.topic || q.topic === 'General') {
+            q.topic = q.topic || 'Unclassified';
+            q.needs_review = true;
           }
         });
-        
-        const assignedCount = deduplicatedData.filter(q => q.topic !== 'General' && q.topic !== selectedTopic).length;
-        if (assignedCount > 0) {
-          toast.info(`Auto-assigned topics to ${assignedCount} questions from Question Bank`);
+
+        if (identifiedCount > 0) {
+          toast.info(`AI identified specific lesson topics for ${identifiedCount} question${identifiedCount === 1 ? '' : 's'}`);
         }
+      } catch (topicErr) {
+        console.warn('AI topic identification unavailable:', topicErr);
+        toast.info('AI topic identification unavailable — please verify topics manually.');
       }
 
       setProgress(78);
@@ -1015,7 +1046,7 @@ export default function BulkImport({
       }
 
       const questionsWithDefaults = deduplicatedForSave.map(q => ({
-        topic: q.topic || q.subject_description || 'General',
+        topic: q.topic || 'Unclassified',
         question_text: stripQuestionPrefix(q.question_text || ''),
         question_type: (q.question_type as 'mcq' | 'true_false' | 'essay' | 'short_answer') || 'mcq',
         choices: q.choices || {},
@@ -1221,7 +1252,7 @@ export default function BulkImport({
         </CardHeader>
         <CardContent>
           <p className="text-sm text-muted-foreground mb-2">
-            Download our CSV template to ensure your data is formatted correctly. The template includes columns for <strong>Category</strong>, <strong>Specialization</strong>, <strong>Subject Code</strong>, and <strong>Subject Description</strong>. <strong>Topic</strong> is optional and will default to Subject Description if not provided.
+            Download our CSV template to ensure your data is formatted correctly. The template includes columns for <strong>Category</strong>, <strong>Specialization</strong>, <strong>Subject Code</strong>, and <strong>Subject Description</strong>. <strong>Topic</strong> is optional — when omitted, the AI will detect the specific lesson/competency for each question automatically based on the question content and specialization context.
           </p>
           <Button onClick={downloadTemplate} variant="outline">
             <Download className="h-4 w-4 mr-2" />
@@ -1305,22 +1336,57 @@ export default function BulkImport({
         </Card>
       )}
 
-      {/* Topic Selection for PDF */}
-      {file && file.name.endsWith('.pdf') && importStep === 'preview' && (
+      {/* Specialization Assignment — replaces manual topic tagging.
+          The AI uses Category + Specialization (+ subject context) to identify
+          a SPECIFIC lesson/competency topic per question automatically. */}
+      {file && importStep === 'preview' && (
         <Card>
           <CardHeader>
-            <CardTitle>Topic Assignment</CardTitle>
+            <CardTitle>Specialization Assignment</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Default Topic for All Questions</label>
-              <input
-                type="text"
-                value={selectedTopic}
-                onChange={(e) => setSelectedTopic(e.target.value)}
-                className="w-full px-3 py-2 border rounded-md bg-background"
-                placeholder="Enter topic name"
-              />
+            <p className="text-sm text-muted-foreground mb-4">
+              Choose the academic specialization these questions belong to. The AI will
+              automatically detect the correct lesson / sub-topic for each question
+              based on the question content, subject code, and specialization context —
+              you no longer need to enter a default topic.
+            </p>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Category</label>
+                <Select
+                  value={selectedCategory}
+                  onValueChange={(v) => { setSelectedCategory(v); setSelectedSpecialization(''); }}
+                >
+                  <SelectTrigger><SelectValue placeholder="Select category (e.g. Major, GE)" /></SelectTrigger>
+                  <SelectContent>
+                    {hierarchy.categories.map(c => (
+                      <SelectItem key={c.id} value={c.name}>{c.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Specialization</label>
+                <Select
+                  value={selectedSpecialization}
+                  onValueChange={setSelectedSpecialization}
+                  disabled={!selectedCategory}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder={selectedCategory ? 'Select specialization (e.g. IT, IS, CS, GE)' : 'Select a category first'} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(() => {
+                      const cat = hierarchy.categories.find(c => c.name === selectedCategory);
+                      const specs = cat ? hierarchy.getSpecializations(cat.id) : [];
+                      return specs.map(s => (
+                        <SelectItem key={s.id} value={s.name}>{s.name}</SelectItem>
+                      ));
+                    })()}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
           </CardContent>
         </Card>
