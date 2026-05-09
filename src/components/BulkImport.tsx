@@ -514,7 +514,7 @@ export default function BulkImport({
             Type: q.question_type || 'mcq',
             ...(q.choices || {}),
             Correct: q.correct_answer || '',
-            Topic: q.topic || metadata.subject_description || selectedTopic || 'General',
+            Topic: q.topic || '',
             Bloom: q.bloom_level || '',
             Difficulty: q.difficulty || '',
             Category: metadata.category || '',
