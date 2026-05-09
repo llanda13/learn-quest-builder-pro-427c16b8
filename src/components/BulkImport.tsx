@@ -486,7 +486,7 @@ export default function BulkImport({
         Type: questionType,
         ...(choiceCount > 0 ? choices : {}),
         Correct: validatedAnswer,
-        Topic: globalMeta.topic || selectedTopic || 'General',
+        Topic: globalMeta.topic || '',
         Category: globalMeta.category || '',
         Specialization: globalMeta.specialization || '',
         SubjectCode: globalMeta.subject_code || '',
