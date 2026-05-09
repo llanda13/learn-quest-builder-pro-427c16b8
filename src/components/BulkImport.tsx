@@ -1046,7 +1046,7 @@ export default function BulkImport({
       }
 
       const questionsWithDefaults = deduplicatedForSave.map(q => ({
-        topic: q.topic || q.subject_description || 'General',
+        topic: q.topic || 'Unclassified',
         question_text: stripQuestionPrefix(q.question_text || ''),
         question_type: (q.question_type as 'mcq' | 'true_false' | 'essay' | 'short_answer') || 'mcq',
         choices: q.choices || {},
