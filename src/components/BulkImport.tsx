@@ -1326,22 +1326,57 @@ export default function BulkImport({
         </Card>
       )}
 
-      {/* Topic Selection for PDF */}
-      {file && file.name.endsWith('.pdf') && importStep === 'preview' && (
+      {/* Specialization Assignment — replaces manual topic tagging.
+          The AI uses Category + Specialization (+ subject context) to identify
+          a SPECIFIC lesson/competency topic per question automatically. */}
+      {file && importStep === 'preview' && (
         <Card>
           <CardHeader>
-            <CardTitle>Topic Assignment</CardTitle>
+            <CardTitle>Specialization Assignment</CardTitle>
           </CardHeader>
           <CardContent>
-            <div className="space-y-2">
-              <label className="text-sm font-medium">Default Topic for All Questions</label>
-              <input
-                type="text"
-                value={selectedTopic}
-                onChange={(e) => setSelectedTopic(e.target.value)}
-                className="w-full px-3 py-2 border rounded-md bg-background"
-                placeholder="Enter topic name"
-              />
+            <p className="text-sm text-muted-foreground mb-4">
+              Choose the academic specialization these questions belong to. The AI will
+              automatically detect the correct lesson / sub-topic for each question
+              based on the question content, subject code, and specialization context —
+              you no longer need to enter a default topic.
+            </p>
+            <div className="grid gap-4 sm:grid-cols-2">
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Category</label>
+                <Select
+                  value={selectedCategory}
+                  onValueChange={(v) => { setSelectedCategory(v); setSelectedSpecialization(''); }}
+                >
+                  <SelectTrigger><SelectValue placeholder="Select category (e.g. Major, GE)" /></SelectTrigger>
+                  <SelectContent>
+                    {hierarchy.categories.map(c => (
+                      <SelectItem key={c.id} value={c.name}>{c.name}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Specialization</label>
+                <Select
+                  value={selectedSpecialization}
+                  onValueChange={setSelectedSpecialization}
+                  disabled={!selectedCategory}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder={selectedCategory ? 'Select specialization (e.g. IT, IS, CS, GE)' : 'Select a category first'} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(() => {
+                      const cat = hierarchy.categories.find(c => c.name === selectedCategory);
+                      const specs = cat ? hierarchy.getSpecializations(cat.id) : [];
+                      return specs.map(s => (
+                        <SelectItem key={s.id} value={s.name}>{s.name}</SelectItem>
+                      ));
+                    })()}
+                  </SelectContent>
+                </Select>
+              </div>
             </div>
           </CardContent>
         </Card>
