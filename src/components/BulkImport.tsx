@@ -880,6 +880,7 @@ export default function BulkImport({
       subject_code: subjRow.code,
       subject_description: subjRow.description,
     };
+    const fixedSubjectId = subjRow.id;
 
     setIsProcessing(true);
     setProgress(0);
