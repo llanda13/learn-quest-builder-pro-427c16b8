@@ -120,6 +120,59 @@ export type Database = {
           },
         ]
       }
+      academic_topics: {
+        Row: {
+          aliases: string[]
+          approved: boolean
+          created_at: string
+          created_by: string | null
+          id: string
+          name: string
+          needs_review: boolean
+          normalized_name: string | null
+          source: string
+          subject_id: string
+          updated_at: string
+          usage_count: number
+        }
+        Insert: {
+          aliases?: string[]
+          approved?: boolean
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          name: string
+          needs_review?: boolean
+          normalized_name?: string | null
+          source?: string
+          subject_id: string
+          updated_at?: string
+          usage_count?: number
+        }
+        Update: {
+          aliases?: string[]
+          approved?: boolean
+          created_at?: string
+          created_by?: string | null
+          id?: string
+          name?: string
+          needs_review?: boolean
+          normalized_name?: string | null
+          source?: string
+          subject_id?: string
+          updated_at?: string
+          usage_count?: number
+        }
+        Relationships: [
+          {
+            foreignKeyName: "academic_topics_subject_id_fkey"
+            columns: ["subject_id"]
+            isOneToOne: false
+            referencedRelation: "academic_subjects"
+            referencedColumns: ["id"]
+          },
+        ]
+      }
       activity_log: {
         Row: {
           action: string
@@ -2270,6 +2323,21 @@ export type Database = {
         Args: { p_question_id: string; p_test_id: string }
         Returns: undefined
       }
+      resolve_topic_for_subject: {
+        Args: {
+          p_candidate: string
+          p_min_similarity?: number
+          p_subject_id: string
+        }
+        Returns: {
+          matched: boolean
+          similarity: number
+          topic_id: string
+          topic_name: string
+        }[]
+      }
+      show_limit: { Args: never; Returns: number }
+      show_trgm: { Args: { "": string }; Returns: string[] }
       validate_tos_exists: { Args: { p_tos_id: string }; Returns: boolean }
       validate_version_balance: {
         Args: { p_parent_test_id: string }
