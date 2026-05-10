@@ -1,5 +1,13 @@
+// AI-driven Topic identifier with strict taxonomy validation.
+// Every returned topic is reconciled against the `academic_topics` table for the
+// supplied subject. If the AI proposes something not in the taxonomy, we fall
+// back to the nearest approved topic via the SQL `resolve_topic_for_subject`
+// function (trigram similarity). Only when nothing reasonable matches do we
+// return the AI candidate as a `needs_review = true` suggestion.
+
 import "https://deno.land/x/xhr@0.1.0/mod.ts";
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
+import { createClient } from "https://esm.sh/@supabase/supabase-js@2.45.0";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -8,12 +16,27 @@ const corsHeaders = {
 
 interface IdentifyRequest {
   questions: { id?: string | number; question_text: string; current_topic?: string }[];
+  subject_id?: string;             // NEW — preferred anchor for taxonomy
   category?: string;
   specialization?: string;
   subject_code?: string;
   subject_description?: string;
+  // Legacy field retained for backward compatibility but ignored when subject_id given
   existing_topics?: string[];
 }
+
+interface ResolvedTopic {
+  topic: string;
+  topic_id: string | null;
+  matched: boolean;        // true => mapped to an approved taxonomy entry
+  confidence: number;      // 0..1
+  needs_review: boolean;
+  source: 'taxonomy' | 'fuzzy' | 'ai_new' | 'fallback';
+}
+
+const FUZZY_MIN = 0.45;     // accept fuzzy match above this
+const FUZZY_SNAP = 0.65;    // snap silently above this
+const NORMALIZE = (s: string) => s.toLowerCase().trim().replace(/\s+/g, ' ');
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') return new Response(null, { headers: corsHeaders });
@@ -23,14 +46,48 @@ serve(async (req) => {
     const questions = (body.questions || []).filter(q => q && q.question_text && q.question_text.trim().length > 4);
 
     if (questions.length === 0) {
-      return new Response(JSON.stringify({ topics: [] }), {
+      return new Response(JSON.stringify({ topics: [], resolutions: [] }), {
         headers: { ...corsHeaders, 'Content-Type': 'application/json' },
       });
     }
 
+    const SUPABASE_URL = Deno.env.get('SUPABASE_URL')!;
+    const SUPABASE_ANON_KEY = Deno.env.get('SUPABASE_ANON_KEY')!;
     const LOVABLE_API_KEY = Deno.env.get('LOVABLE_API_KEY');
     if (!LOVABLE_API_KEY) throw new Error('LOVABLE_API_KEY is not configured');
 
+    // User-scoped client (respects RLS)
+    const authHeader = req.headers.get('Authorization') || '';
+    const supabase = createClient(SUPABASE_URL, SUPABASE_ANON_KEY, {
+      global: { headers: { Authorization: authHeader } },
+    });
+
+    // Resolve subject_id from subject_code if not provided
+    let subjectId = body.subject_id || null;
+    if (!subjectId && body.subject_code) {
+      const { data: subj } = await supabase
+        .from('academic_subjects')
+        .select('id')
+        .ilike('code', body.subject_code.trim())
+        .eq('deleted', false)
+        .maybeSingle();
+      subjectId = subj?.id || null;
+    }
+
+    // Load approved taxonomy for this subject
+    let taxonomy: { id: string; name: string; aliases: string[] }[] = [];
+    if (subjectId) {
+      const { data } = await supabase
+        .from('academic_topics')
+        .select('id, name, aliases')
+        .eq('subject_id', subjectId)
+        .eq('approved', true)
+        .order('usage_count', { ascending: false })
+        .limit(200);
+      taxonomy = (data || []).map(t => ({ id: t.id, name: t.name, aliases: t.aliases || [] }));
+    }
+
+    const taxonomyNames = taxonomy.map(t => t.name);
     const ctxLines = [
       body.category && `Category: ${body.category}`,
       body.specialization && `Specialization: ${body.specialization}`,
@@ -38,48 +95,37 @@ serve(async (req) => {
       body.subject_description && `Subject Description: ${body.subject_description}`,
     ].filter(Boolean).join('\n');
 
-    const existingList = (body.existing_topics || []).slice(0, 80);
+    const systemPrompt = `You are an academic topic-tagging expert. For EACH question return ONE specific lesson/competency topic.
 
-    const systemPrompt = `You are an academic topic-tagging expert. For EACH question you MUST output ONE specific lesson/sub-topic/competency string. NEVER return an empty string.
-
-CRITICAL RULES:
-1. The topic must describe the actual lesson/competency the question tests — NOT the subject title.
-   BAD: "Life and Works of Rizal", "Introduction to Computing", "Programming", "General", "Unclassified"
-   GOOD examples for Rizal subject: "Rizal Law (RA 1425)", "Noli Me Tangere", "El Filibusterismo",
-        "Rizal's Childhood and Family", "19th Century Philippines", "Rizal in Europe",
-        "Rizal's Exile in Dapitan", "Rizal's Trial and Execution", "Propaganda Movement",
-        "Rizal's Poems and Essays", "Spanish Colonial Society", "La Liga Filipina"
-   GOOD examples for Programming: "Variables and Data Types", "For Loops", "Conditional Statements",
-        "Functions and Parameters", "Arrays and Lists", "Object-Oriented Programming"
-2. Use 2-6 words. Title Case. No trailing punctuation.
-3. Stay strictly within the given Specialization and Subject context. Never assign a topic that belongs to a different specialization.
-4. If an existing topic from the provided list closely matches the question's lesson, REUSE the exact existing topic string (case-sensitive).
-5. You MUST return a non-empty topic for every question. If a question is generic or unclear, infer the closest plausible lesson from the question wording within the subject context. Never return "", "General", "Unclassified", or the subject title.
+STRICT RULES:
+1. Whenever possible, REUSE the EXACT string from the "Approved Topic Taxonomy" list below (case-sensitive). Reuse is strongly preferred.
+2. Only propose a new topic name when the question clearly tests a lesson NOT covered by any approved topic. Mark such items with new_topic: true.
+3. Topic must describe the lesson the question tests, NOT the subject title. 2-6 words, Title Case, no trailing punctuation.
+4. Stay strictly within the given Subject context. Never invent off-topic competencies.
+5. Never return empty, "General", "Unclassified", "N/A", or the subject title.
 
 Subject context:
 ${ctxLines || '(none provided)'}
 
-${existingList.length ? `Existing topics in the question bank (prefer reusing these when they fit):\n- ${existingList.join('\n- ')}` : ''}`;
+Approved Topic Taxonomy for this subject (${taxonomyNames.length} entries):
+${taxonomyNames.length ? taxonomyNames.map(n => `- ${n}`).join('\n') : '(empty — taxonomy will be seeded from your suggestions; mark every item new_topic: true)'}`;
 
     const userPayload = questions.map((q, i) => ({ idx: i, text: q.question_text.slice(0, 800) }));
 
-    const response = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
+    const aiResp = await fetch('https://ai.gateway.lovable.dev/v1/chat/completions', {
       method: 'POST',
-      headers: {
-        'Authorization': `Bearer ${LOVABLE_API_KEY}`,
-        'Content-Type': 'application/json',
-      },
+      headers: { 'Authorization': `Bearer ${LOVABLE_API_KEY}`, 'Content-Type': 'application/json' },
       body: JSON.stringify({
         model: 'google/gemini-3-flash-preview',
         messages: [
           { role: 'system', content: systemPrompt },
-          { role: 'user', content: `Tag each of the following questions with its specific lesson/competency topic. Return one entry per question, preserving idx. Every topic field MUST be a non-empty 2-6 word phrase:\n\n${JSON.stringify(userPayload)}` },
+          { role: 'user', content: `Tag each question. Return one entry per question, preserving idx.\n\n${JSON.stringify(userPayload)}` },
         ],
         tools: [{
           type: 'function',
           function: {
             name: 'return_topics',
-            description: 'Return per-question specific lesson topics',
+            description: 'Return per-question lesson topics with reuse signal',
             parameters: {
               type: 'object',
               properties: {
@@ -90,6 +136,7 @@ ${existingList.length ? `Existing topics in the question bank (prefer reusing th
                     properties: {
                       idx: { type: 'number' },
                       topic: { type: 'string' },
+                      new_topic: { type: 'boolean', description: 'true only when not in approved taxonomy' },
                     },
                     required: ['idx', 'topic'],
                   },
@@ -103,105 +150,108 @@ ${existingList.length ? `Existing topics in the question bank (prefer reusing th
       }),
     });
 
-    if (!response.ok) {
-      const t = await response.text();
-      console.error('AI gateway error:', response.status, t);
-      // Graceful degradation: return heuristic topics so the UI never shows blank Topic column
-      const fallback = heuristicTopics(questions, existingList, body.subject_description);
-      const reason = response.status === 402 ? 'AI credits exhausted' : response.status === 429 ? 'Rate limited' : `AI gateway ${response.status}`;
-      return new Response(JSON.stringify({ topics: fallback, fallback: true, reason }), {
-        headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-      });
+    let aiTopics: { idx: number; topic: string; new_topic?: boolean }[] = [];
+    let aiAvailable = true;
+    if (!aiResp.ok) {
+      aiAvailable = false;
+      console.error('AI gateway error:', aiResp.status, await aiResp.text().catch(() => ''));
+    } else {
+      const aiResult = await aiResp.json();
+      const tc = aiResult.choices?.[0]?.message?.tool_calls?.[0];
+      const args = tc?.function?.arguments;
+      const parsed = typeof args === 'string' ? JSON.parse(args) : (args || {});
+      aiTopics = parsed.topics || [];
     }
 
-    const aiResult = await response.json();
-    const toolCall = aiResult.choices?.[0]?.message?.tool_calls?.[0];
-    const args = toolCall?.function?.arguments;
-    const parsed = typeof args === 'string' ? JSON.parse(args) : (args || {});
-    const topicsArr: { idx: number; topic: string }[] = parsed.topics || [];
-
-    const fb = heuristicTopics(questions, existingList, body.subject_description);
-
-    const subjLower = (body.subject_description || '').trim().toLowerCase();
+    // ============= VALIDATION & RESOLUTION LAYER =============
+    const subjLower = NORMALIZE(body.subject_description || '');
     const banned = new Set(['', 'general', 'unclassified', 'general concepts', 'n/a', 'none']);
 
-    // Map idx -> topic, ordered to match input; guarantee NO empty topic ever leaves the server.
-    const result: string[] = questions.map((q, i) => {
-      const found = topicsArr.find(t => t.idx === i);
-      let topic = (found?.topic || '').trim();
-      if (subjLower && topic.toLowerCase() === subjLower) topic = '';
-      if (banned.has(topic.toLowerCase())) topic = '';
-      if (!topic) topic = (fb[i] || '').trim();
-      if (!topic || banned.has(topic.toLowerCase())) {
-        // Last-resort: take first 4 capitalized/meaningful words from question text
-        const words = (q.question_text || '').replace(/[^\w\s]/g, ' ').split(/\s+/).filter(w => w.length > 3).slice(0, 4);
-        topic = words.length ? words.map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ') : 'Subject Concepts';
-      }
-      return topic;
-    });
+    // Build a fast lookup of taxonomy (name + aliases)
+    const taxonomyLookup = new Map<string, { id: string; name: string }>();
+    for (const t of taxonomy) {
+      taxonomyLookup.set(NORMALIZE(t.name), { id: t.id, name: t.name });
+      for (const a of t.aliases) taxonomyLookup.set(NORMALIZE(a), { id: t.id, name: t.name });
+    }
 
-    console.log(`identify-question-topics: returned ${result.length} topics, sample: ${result.slice(0, 3).join(' | ')}`);
-    return new Response(JSON.stringify({ topics: result }), {
-      headers: { ...corsHeaders, 'Content-Type': 'application/json' },
-    });
+    const resolveOne = async (candidate: string): Promise<ResolvedTopic> => {
+      const norm = NORMALIZE(candidate);
+      if (!norm || banned.has(norm) || norm === subjLower) {
+        return { topic: '', topic_id: null, matched: false, confidence: 0, needs_review: true, source: 'fallback' };
+      }
+
+      // 1) exact taxonomy / alias match
+      const direct = taxonomyLookup.get(norm);
+      if (direct) {
+        return { topic: direct.name, topic_id: direct.id, matched: true, confidence: 1, needs_review: false, source: 'taxonomy' };
+      }
+
+      // 2) DB-side fuzzy resolver (trigram)
+      if (subjectId) {
+        const { data: rows } = await supabase.rpc('resolve_topic_for_subject', {
+          p_subject_id: subjectId,
+          p_candidate: candidate,
+          p_min_similarity: FUZZY_MIN,
+        });
+        const best = Array.isArray(rows) ? rows[0] : rows;
+        if (best && best.topic_name && best.similarity >= FUZZY_SNAP) {
+          return { topic: best.topic_name, topic_id: best.topic_id, matched: true, confidence: Number(best.similarity), needs_review: false, source: 'fuzzy' };
+        }
+        if (best && best.topic_name && best.similarity >= FUZZY_MIN) {
+          // Borderline: snap but flag for admin review
+          return { topic: best.topic_name, topic_id: best.topic_id, matched: true, confidence: Number(best.similarity), needs_review: true, source: 'fuzzy' };
+        }
+      }
+
+      // 3) Genuinely new topic — keep AI candidate but mark for review
+      const cleaned = candidate
+        .replace(/[^\w\s\-/&()0-9]/g, ' ')
+        .replace(/\s+/g, ' ')
+        .trim()
+        .split(' ')
+        .slice(0, 6)
+        .map(w => w.length > 2 ? w[0].toUpperCase() + w.slice(1) : w)
+        .join(' ');
+      return { topic: cleaned || candidate.trim(), topic_id: null, matched: false, confidence: 0.3, needs_review: true, source: 'ai_new' };
+    };
+
+    const resolutions: ResolvedTopic[] = [];
+    for (let i = 0; i < questions.length; i++) {
+      const aiHit = aiTopics.find(t => t.idx === i);
+      let candidate = (aiHit?.topic || '').trim();
+
+      // If AI failed, take a salient phrase from the question as candidate
+      if (!candidate) {
+        const cap = questions[i].question_text.match(/\b([A-Z][A-Za-z0-9]*(?:\s+(?:[A-Z][A-Za-z0-9]*|\d+|de|of|the|and)){1,3})\b/);
+        candidate = cap ? cap[1] : questions[i].question_text.split(/\s+/).slice(0, 4).join(' ');
+      }
+
+      const resolved = await resolveOne(candidate);
+
+      // Final guarantee: never return empty topic
+      if (!resolved.topic) {
+        resolved.topic = taxonomyNames[0] || `${body.subject_code || 'Subject'} Concepts`;
+        resolved.needs_review = true;
+        resolved.source = 'fallback';
+      }
+      resolutions.push(resolved);
+    }
+
+    const topics = resolutions.map(r => r.topic);
+    console.log(`identify-question-topics: subject_id=${subjectId} taxonomy=${taxonomy.length} matched=${resolutions.filter(r => r.matched).length}/${resolutions.length}`);
+
+    return new Response(JSON.stringify({
+      topics,
+      resolutions,
+      subject_id: subjectId,
+      taxonomy_size: taxonomy.length,
+      ai_available: aiAvailable,
+    }), { headers: { ...corsHeaders, 'Content-Type': 'application/json' } });
   } catch (error) {
     console.error('identify-question-topics error:', error);
-    return new Response(JSON.stringify({ error: error instanceof Error ? error.message : 'Failed' }), {
+    return new Response(JSON.stringify({ error: 'Failed to identify topics' }), {
       status: 500,
       headers: { ...corsHeaders, 'Content-Type': 'application/json' },
     });
   }
 });
-
-// Heuristic topic extraction — used when the AI is unavailable or returns empty.
-// Strategy: (1) match against existing question-bank topics by keyword overlap;
-// (2) extract a salient noun phrase / capitalized phrase from the question.
-function heuristicTopics(
-  questions: { question_text: string }[],
-  existingTopics: string[],
-  subjectDescription?: string,
-): string[] {
-  const stop = new Set(['the','a','an','of','in','on','for','to','and','or','is','are','was','were','be','been','by','with','as','at','from','that','this','which','what','who','when','where','how','why','it','its','their','his','her','they','them','these','those','than','then','into','about','after','before','during','between','also','not','no','do','does','did','can','could','should','would','will','may','might','have','has','had','one','two','first','second','following','question','statement']);
-  const subjLower = (subjectDescription || '').toLowerCase();
-
-  const tokenize = (s: string) => s.toLowerCase().replace(/[^\w\s-]/g, ' ').split(/\s+/).filter(w => w.length > 2 && !stop.has(w));
-
-  // Pre-tokenize existing topics
-  const existingTokens = existingTopics.map(t => ({ topic: t, tokens: new Set(tokenize(t)) }));
-
-  return questions.map(q => {
-    const text = q.question_text || '';
-    const qTokens = tokenize(text);
-    const qSet = new Set(qTokens);
-
-    // (1) Best existing-topic match by token overlap
-    let best = { topic: '', score: 0 };
-    for (const et of existingTokens) {
-      if (!et.tokens.size) continue;
-      let overlap = 0;
-      et.tokens.forEach(t => { if (qSet.has(t)) overlap++; });
-      const score = overlap / et.tokens.size;
-      if (score > best.score) best = { topic: et.topic, score };
-    }
-    if (best.score >= 0.5) return best.topic;
-
-    // (2) Extract first capitalized multi-word phrase (e.g., "RA 1425", "Noli Me Tangere")
-    const capMatch = text.match(/\b([A-Z][A-Za-z0-9]*(?:\s+(?:[A-Z][A-Za-z0-9]*|\d+|de|of|the|and))+)\b/);
-    if (capMatch) {
-      const phrase = capMatch[1].replace(/\s+/g, ' ').trim();
-      if (phrase.length <= 60 && phrase.toLowerCase() !== subjLower) return phrase;
-    }
-
-    // (3) Top 2-3 salient tokens from the question
-    const freq = new Map<string, number>();
-    qTokens.forEach(t => freq.set(t, (freq.get(t) || 0) + 1));
-    const top = [...freq.entries()].sort((a, b) => b[1] - a[1]).slice(0, 3).map(([t]) => t);
-    if (top.length) {
-      const phrase = top.map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-      if (phrase.toLowerCase() !== subjLower) return phrase;
-    }
-
-    return 'General Concepts';
-  });
-}
-

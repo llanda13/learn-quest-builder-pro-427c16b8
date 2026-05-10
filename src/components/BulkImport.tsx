@@ -880,6 +880,7 @@ export default function BulkImport({
       subject_code: subjRow.code,
       subject_description: subjRow.description,
     };
+    const fixedSubjectId = subjRow.id;
 
     setIsProcessing(true);
     setProgress(0);
@@ -1014,74 +1015,59 @@ export default function BulkImport({
         q.subject_description = fixedContext.subject_description;
       });
 
-      // ===== AI-DRIVEN TOPIC IDENTIFICATION (single fixed context) =====
+      // ===== TAXONOMY-VALIDATED TOPIC IDENTIFICATION =====
+      // The edge function reconciles every AI suggestion against the
+      // `academic_topics` table for the chosen subject. Topics that don't match
+      // an approved entry are either snapped to the nearest valid topic
+      // (trigram similarity) or kept as a needs_review suggestion.
       setProgress(78);
-      setCurrentStep('Identifying specific lesson topics with AI...');
-      let topicsFromAI: string[] = [];
+      setCurrentStep('Validating topics against academic taxonomy...');
+      type Resolution = { topic: string; topic_id: string | null; matched: boolean; confidence: number; needs_review: boolean; source: string };
+      let resolutions: Resolution[] = [];
       let topicWarning: string | null = null;
+      let taxonomySize = 0;
       try {
         const { data, error } = await supabase.functions.invoke('identify-question-topics', {
           body: {
             questions: deduplicatedData.map((q) => ({ question_text: q.question_text })),
+            subject_id: fixedSubjectId,
             ...fixedContext,
-            existing_topics: existingTopics,
           },
         });
         if (error) throw error;
-        topicsFromAI = (data?.topics || []) as string[];
-        if (data?.fallback) topicWarning = data?.reason || 'AI unavailable — using heuristic topics';
+        resolutions = (data?.resolutions || []) as Resolution[];
+        taxonomySize = data?.taxonomy_size || 0;
+        if (data?.ai_available === false) topicWarning = 'AI service unavailable — topics validated against taxonomy only';
       } catch (topicErr) {
-        console.warn('AI topic identification unavailable:', topicErr);
-        topicWarning = 'AI topic service unavailable — using heuristic topics';
+        console.warn('Topic identification unavailable:', topicErr);
+        topicWarning = 'Topic validation service unavailable — items flagged for review';
       }
 
-      // Local fallback: if AI returned nothing or fewer items than expected, derive from text
-      const deriveLocalTopic = (text: string): string => {
-        const stop = new Set(['the','a','an','of','in','on','for','to','and','or','is','are','was','were','be','by','with','as','at','from','that','this','which','what','who','when','where','how','why','it','its','their','his','her','they','them','these','those','than','then','into','about','one','two','question','following']);
-        // Try matching an existing bank topic by keyword overlap
-        const tokens = text.toLowerCase().replace(/[^\w\s-]/g, ' ').split(/\s+/).filter(w => w.length > 2 && !stop.has(w));
-        const qSet = new Set(tokens);
-        let best = { topic: '', score: 0 };
-        for (const et of existingTopics) {
-          const etTokens = et.toLowerCase().split(/\s+/).filter(w => w.length > 2 && !stop.has(w));
-          if (!etTokens.length) continue;
-          const overlap = etTokens.filter(t => qSet.has(t)).length / etTokens.length;
-          if (overlap > best.score) best = { topic: et, score: overlap };
-        }
-        if (best.score >= 0.5) return best.topic;
-        const cap = text.match(/\b([A-Z][A-Za-z0-9]*(?:\s+(?:[A-Z][A-Za-z0-9]*|\d+|de|of|the|and)){1,4})\b/);
-        if (cap) return cap[1].replace(/\s+/g, ' ').trim();
-        const top = tokens.slice(0, 3).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
-        return top || 'General Concepts';
-      };
-
-      const subjDescLower = fixedContext.subject_description.trim().toLowerCase();
-      const bannedTopics = new Set(['', 'general', 'unclassified', 'general concepts', 'n/a', 'none']);
-      let identifiedCount = 0;
+      let matchedCount = 0;
+      let suggestedCount = 0;
       deduplicatedData.forEach((q, i) => {
-        let t = (topicsFromAI[i] || '').trim();
-        const tLower = t.toLowerCase();
-        if (!t || tLower === subjDescLower || bannedTopics.has(tLower)) {
-          t = deriveLocalTopic(q.question_text);
-          q.needs_review = true;
+        const r = resolutions[i];
+        if (r) {
+          q.topic = r.topic;
+          // Track taxonomy resolution metadata for downstream save logic
+          (q as any).__topic_id = r.topic_id;
+          (q as any).__topic_matched = r.matched;
+          (q as any).__topic_source = r.source;
+          q.needs_review = r.needs_review || q.needs_review;
+          if (r.matched) matchedCount++; else suggestedCount++;
         } else {
-          identifiedCount++;
+          q.topic = `${fixedContext.subject_code} Concepts`;
+          q.needs_review = true;
+          (q as any).__topic_matched = false;
+          (q as any).__topic_source = 'fallback';
         }
-        // Final guarantee: never leave topic empty in the UI
-        if (!t || bannedTopics.has(t.toLowerCase())) {
-          const words = (q.question_text || '').replace(/[^\w\s]/g, ' ').split(/\s+/).filter(w => w.length > 3).slice(0, 4);
-          t = words.length
-            ? words.map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ')
-            : `${fixedContext.subject_code} Concepts`;
-        }
-        q.topic = t;
       });
-      console.log('[BulkImport] Topics assigned. Sample:', deduplicatedData.slice(0, 5).map(q => q.topic));
+      console.log(`[BulkImport] Topic validation: ${matchedCount} matched / ${suggestedCount} new suggestions (taxonomy size: ${taxonomySize})`);
 
       if (topicWarning) toast.warning(topicWarning);
-      if (identifiedCount > 0) {
-        toast.info(`AI identified specific lesson topics for ${identifiedCount} question${identifiedCount === 1 ? '' : 's'}`);
-      }
+      if (matchedCount > 0) toast.success(`${matchedCount} question${matchedCount === 1 ? '' : 's'} mapped to approved taxonomy`);
+      if (suggestedCount > 0) toast.info(`${suggestedCount} new topic suggestion${suggestedCount === 1 ? '' : 's'} flagged for admin review`);
+
 
       setProgress(100);
       setCurrentStep('Analysis complete');
@@ -1170,6 +1156,42 @@ export default function BulkImport({
         await buildTaxonomyMatrix(questionsWithDefaults);
       } catch (matrixError) {
         console.warn('Failed to build taxonomy matrix:', matrixError);
+      }
+
+      // ===== PERSIST NEW TOPIC SUGGESTIONS INTO academic_topics =====
+      // Newly proposed topics (not matched to an approved entry) are stored in
+      // the taxonomy as `approved=false, needs_review=true` so admins can
+      // confirm them once and future Bulk Imports will reuse the canonical name.
+      try {
+        const catRow = hierarchy.categories.find(c => c.name === selectedCategory);
+        const specRow = catRow ? hierarchy.getSpecializations(catRow.id).find(s => s.name === selectedSpecialization) : undefined;
+        const subjRow = specRow ? hierarchy.getSubjects(specRow.id).find(s => s.code === selectedSubjectCode) : undefined;
+        if (subjRow) {
+          const newSuggestions = new Map<string, string>(); // normalized -> original casing
+          deduplicatedForSave.forEach((q) => {
+            const matched = (q as any).__topic_matched;
+            if (matched === false && q.topic) {
+              const key = q.topic.toLowerCase().trim();
+              if (!newSuggestions.has(key)) newSuggestions.set(key, q.topic.trim());
+            }
+          });
+          if (newSuggestions.size > 0) {
+            const rows = Array.from(newSuggestions.values()).map(name => ({
+              subject_id: subjRow.id,
+              name,
+              source: 'imported',
+              approved: false,
+              needs_review: true,
+            }));
+            const { error: topicErr } = await supabase
+              .from('academic_topics')
+              .upsert(rows, { onConflict: 'subject_id,normalized_name', ignoreDuplicates: true });
+            if (topicErr) console.warn('Topic taxonomy upsert warning:', topicErr.message);
+            else console.log(`Persisted ${rows.length} new topic suggestion(s) to academic_topics for review`);
+          }
+        }
+      } catch (taxErr) {
+        console.warn('Failed to persist new topic suggestions:', taxErr);
       }
 
       setProgress(60);
