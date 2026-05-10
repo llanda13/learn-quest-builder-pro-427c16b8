@@ -162,7 +162,7 @@ Deno.serve(async (req) => {
         if (rubricError) {
           console.error('Error creating rubric:', rubricError)
           return new Response(
-            JSON.stringify({ error: rubricError.message }),
+            JSON.stringify({ error: 'Failed to create rubric' }),
             { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
           )
         }
@@ -184,7 +184,7 @@ Deno.serve(async (req) => {
         if (criteriaError) {
           console.error('Error creating criteria:', criteriaError)
           return new Response(
-            JSON.stringify({ error: criteriaError.message }),
+            JSON.stringify({ error: 'Failed to create rubric criteria' }),
             { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
           )
         }
@@ -224,7 +224,7 @@ Deno.serve(async (req) => {
         if (rubricError) {
           console.error('Error updating rubric:', rubricError)
           return new Response(
-            JSON.stringify({ error: rubricError.message }),
+            JSON.stringify({ error: 'Failed to update rubric' }),
             { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
           )
         }
@@ -252,7 +252,7 @@ Deno.serve(async (req) => {
           if (criteriaError) {
             console.error('Error updating criteria:', criteriaError)
             return new Response(
-              JSON.stringify({ error: criteriaError.message }),
+              JSON.stringify({ error: 'Failed to update rubric criteria' }),
               { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
             )
           }
@@ -290,7 +290,7 @@ Deno.serve(async (req) => {
         if (error) {
           console.error('Error deleting rubric:', error)
           return new Response(
-            JSON.stringify({ error: error.message }),
+            JSON.stringify({ error: 'Failed to delete rubric' }),
             { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
           )
         }
