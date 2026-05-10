@@ -74,7 +74,7 @@ Deno.serve(async (req) => {
         if (error) {
           console.error('Error fetching scores:', error)
           return new Response(
-            JSON.stringify({ error: error.message }),
+            JSON.stringify({ error: 'Failed to fetch scores' }),
             { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
           )
         }
@@ -138,7 +138,7 @@ Deno.serve(async (req) => {
         if (scoreError) {
           console.error('Error creating score:', scoreError)
           return new Response(
-            JSON.stringify({ error: scoreError.message }),
+            JSON.stringify({ error: 'Failed to create score' }),
             { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
           )
         }
@@ -192,7 +192,7 @@ Deno.serve(async (req) => {
         if (error) {
           console.error('Error updating score:', error)
           return new Response(
-            JSON.stringify({ error: error.message }),
+            JSON.stringify({ error: 'Failed to update score' }),
             { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
           )
         }
@@ -220,7 +220,7 @@ Deno.serve(async (req) => {
         if (error) {
           console.error('Error deleting score:', error)
           return new Response(
-            JSON.stringify({ error: error.message }),
+            JSON.stringify({ error: 'Failed to delete score' }),
             { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
           )
         }

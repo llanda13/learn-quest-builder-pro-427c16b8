@@ -288,7 +288,7 @@ Return a JSON object with an "items" array containing questions in this exact fo
     if (insertError) {
       console.error('Database insertion error:', insertError);
       return new Response(
-        JSON.stringify({ error: 'Failed to save questions to database', details: insertError.message }),
+        JSON.stringify({ error: 'Failed to save questions to database' }),
         { status: 500, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
