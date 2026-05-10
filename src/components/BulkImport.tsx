@@ -3,6 +3,7 @@ import { useDropzone } from 'react-dropzone';
 import Papa from 'papaparse';
 import * as pdfjsLib from 'pdfjs-dist';
 import pdfjsWorker from 'pdfjs-dist/build/pdf.worker.min.mjs?url';
+import { createWorker, PSM } from 'tesseract.js';
 import { supabase } from '@/integrations/supabase/client';
 import { Button } from '@/components/ui/button';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
@@ -28,6 +29,7 @@ const BI_KEYS = {
   step: 'bulk-import.step',
   category: 'bulk-import.selected-category',
   specialization: 'bulk-import.selected-specialization',
+  subject: 'bulk-import.selected-subject-code',
 } as const;
 
 const readJSON = <T,>(key: string, fallback: T): T => {
@@ -102,6 +104,7 @@ export default function BulkImport({
   const [showPreview, setShowPreview] = useState(false);
   const [selectedCategory, setSelectedCategory] = useState<string>(() => readJSON<string>(BI_KEYS.category, ''));
   const [selectedSpecialization, setSelectedSpecialization] = useState<string>(() => readJSON<string>(BI_KEYS.specialization, ''));
+  const [selectedSubjectCode, setSelectedSubjectCode] = useState<string>(() => readJSON<string>(BI_KEYS.subject, ''));
   const [classificationResults, setClassificationResults] = useState<any[]>([]);
   const [showClassificationDetails, setShowClassificationDetails] = useState(false);
   
@@ -234,6 +237,7 @@ export default function BulkImport({
   useEffect(() => { writeJSON(BI_KEYS.step, importStep); }, [importStep]);
   useEffect(() => { writeJSON(BI_KEYS.category, selectedCategory); }, [selectedCategory]);
   useEffect(() => { writeJSON(BI_KEYS.specialization, selectedSpecialization); }, [selectedSpecialization]);
+  useEffect(() => { writeJSON(BI_KEYS.subject, selectedSubjectCode); }, [selectedSubjectCode]);
 
   const { batchClassify, buildTaxonomyMatrix } = useTaxonomyClassification({
     useMLClassifier: true,
@@ -371,20 +375,90 @@ export default function BulkImport({
     return '';
   };
 
-  /** Extract raw text from PDF using pdfjs */
+  const normalizePDFText = (text: string): string => text
+    .replace(/[\u00a0\u2000-\u200b\u202f\u205f\u3000]/g, ' ')
+    .replace(/[“”]/g, '"')
+    .replace(/[‘’]/g, "'")
+    .replace(/[‐‑‒–—]/g, '-')
+    .replace(/\r\n?/g, '\n')
+    .replace(/[ \t]+\n/g, '\n')
+    .replace(/\n{3,}/g, '\n\n')
+    .trim();
+
+  const hasUsablePDFText = (text: string): boolean => {
+    const letters = (text.match(/[A-Za-z]/g) || []).length;
+    const numberedItems = (text.match(/(?:^|\n|\s)(?:Q\.?\s*)?\d{1,3}\s*[.)]\s+/gi) || []).length;
+    return text.length >= 500 && letters >= 100 && numberedItems >= 3;
+  };
+
+  const renderPageForOCR = async (page: pdfjsLib.PDFPageProxy): Promise<HTMLCanvasElement> => {
+    const viewport = page.getViewport({ scale: 2.25 });
+    const canvas = document.createElement('canvas');
+    const context = canvas.getContext('2d');
+    if (!context) throw new Error('Could not initialize PDF canvas for OCR');
+    canvas.width = Math.ceil(viewport.width);
+    canvas.height = Math.ceil(viewport.height);
+    await page.render({ canvasContext: context, viewport, canvas }).promise;
+    return canvas;
+  };
+
+  /** Extract raw text from PDF using pdfjs; OCR image-only PDFs before parsing. */
   const extractPDFText = async (file: File): Promise<string> => {
     pdfjsLib.GlobalWorkerOptions.workerSrc = pdfjsWorker;
     const arrayBuffer = await file.arrayBuffer();
     const pdf = await pdfjsLib.getDocument(arrayBuffer).promise;
-    
+
     let fullText = '';
     for (let i = 1; i <= pdf.numPages; i++) {
       const page = await pdf.getPage(i);
       const textContent = await page.getTextContent();
-      const pageText = textContent.items.map((item: any) => item.str).join(' ');
+      let lastY: number | null = null;
+      let pageText = '';
+      for (const item of textContent.items as any[]) {
+        const str = item.str ?? '';
+        const y = item.transform ? item.transform[5] : null;
+        if (lastY !== null && y !== null && Math.abs(y - lastY) > 2) {
+          pageText += '\n';
+        } else if (pageText && !pageText.endsWith(' ') && !pageText.endsWith('\n')) {
+          pageText += ' ';
+        }
+        pageText += str;
+        if (y !== null) lastY = y;
+        if (item.hasEOL) pageText += '\n';
+      }
       fullText += pageText + '\n';
     }
-    return fullText;
+    const nativeText = normalizePDFText(fullText);
+    if (hasUsablePDFText(nativeText)) {
+      console.info(`[BulkImport] Native PDF text extraction usable (${nativeText.length} chars).`);
+      return nativeText;
+    }
+
+    console.info('[BulkImport] Native PDF text layer is empty/poor; running OCR before question detection.');
+    setCurrentStep('PDF text layer is image-based; running OCR...');
+    const worker = await createWorker('eng');
+    await worker.setParameters({
+      tessedit_pageseg_mode: PSM.SINGLE_BLOCK,
+      preserve_interword_spaces: '1',
+      user_defined_dpi: '300',
+    });
+
+    let ocrText = '';
+    try {
+      for (let i = 1; i <= pdf.numPages; i++) {
+        setCurrentStep(`Running OCR on page ${i} of ${pdf.numPages}...`);
+        const page = await pdf.getPage(i);
+        const canvas = await renderPageForOCR(page);
+        const { data } = await worker.recognize(canvas);
+        ocrText += `${data.text}\n\n`;
+      }
+    } finally {
+      await worker.terminate();
+    }
+
+    const normalizedOCR = normalizePDFText(ocrText);
+    console.info(`[BulkImport] OCR extracted ${normalizedOCR.length} chars from PDF.`);
+    return normalizedOCR;
   };
 
   /** AI-assisted PDF parsing: sends raw text to edge function for intelligent extraction */
@@ -417,23 +491,41 @@ export default function BulkImport({
     }
   };
 
-  /** Regex-based fallback PDF parser for when AI is unavailable */
+  /** Regex-based PDF parser that runs before any AI/classification logic. */
   const regexParsePDF = (fullText: string): any[] => {
-    const globalMeta = extractPDFMetadata(fullText);
+    const normalizedText = normalizePDFText(fullText);
+    const globalMeta = extractPDFMetadata(normalizedText);
     const questions: any[] = [];
 
-    const questionBlockRegex = /(?:^|\n)\s*(?:Q\.?\s*)?(\d+)\s*[.)]\s+/gi;
-    const matches: { index: number; num: string }[] = [];
+    // Accept numbered question delimiters that may be preceded by newline OR
+    // simply whitespace (PDF text extraction often loses line breaks).
+    // Require sequential numbering to avoid matching numbers inside question text.
+    const questionBlockRegex = /(?:^|\n|\s)(?:Q\.?\s*)?(\d{1,3})\s*[.)]\s+/gi;
+    const rawMatches: { index: number; num: number }[] = [];
     let match: RegExpExecArray | null;
-    while ((match = questionBlockRegex.exec(fullText)) !== null) {
-      matches.push({ index: match.index, num: match[1] });
+    while ((match = questionBlockRegex.exec(normalizedText)) !== null) {
+      rawMatches.push({ index: match.index, num: parseInt(match[1], 10) });
+    }
+
+    // Filter: keep only matches that form an increasing sequence starting from 1 or 2
+    const matches: { index: number; num: string }[] = [];
+    let expected = 1;
+    for (const m of rawMatches) {
+      if (m.num === expected || (matches.length === 0 && m.num <= 3)) {
+        matches.push({ index: m.index, num: String(m.num) });
+        expected = m.num + 1;
+      } else if (m.num === expected + 1) {
+        // tolerate one skip (e.g. parser missed a question)
+        matches.push({ index: m.index, num: String(m.num) });
+        expected = m.num + 1;
+      }
     }
 
     const blocks: { num: string; text: string }[] = [];
     for (let i = 0; i < matches.length; i++) {
       const start = matches[i].index;
-      const end = i + 1 < matches.length ? matches[i + 1].index : fullText.length;
-      const blockText = fullText.substring(start, end).trim();
+      const end = i + 1 < matches.length ? matches[i + 1].index : normalizedText.length;
+      const blockText = normalizedText.substring(start, end).trim();
       const cleaned = blockText.replace(/^\s*(?:Q\.?\s*)?\d+\s*[.)]\s+/i, '').trim();
       blocks.push({ num: matches[i].num, text: cleaned });
     }
@@ -449,32 +541,37 @@ export default function BulkImport({
         .replace(/•\s*Cognitive\s*Level.*$/gim, '')
         .replace(/•\s*Difficulty\s*Level.*$/gim, '')
         .replace(/•\s*Points?\s*Value.*$/gim, '')
+        .replace(/\b(?:Prepared by|Checked by|Approved by|Instructor|Page\s+\d+)\s*:?[\s\S]*$/i, '')
         .replace(/(?:Answer|Correct\s*Answer)\s*:\s*[A-Fa-f]\b/gi, '')
         .trim();
 
-      const questionText = cleanedBlock.split(/(?:^|\n)\s*[A-F][.)]\s/m)[0]
-        .replace(/\n/g, ' ').trim();
+      // Question stem ends at first choice marker (newline OR whitespace-prefixed A./A))
+      const questionText = cleanedBlock.split(/(?:^|\n|\s)[A-F]\s*[.)]\s+/im)[0]
+        .replace(/\s+/g, ' ').trim();
 
       if (!questionText || questionText.length < 5) continue;
 
       const choices: Record<string, string> = {};
-      const choiceRegex = /(?:^|\n)\s*([A-F])\s*[.)]\s+(.+?)(?=(?:\n\s*[A-F]\s*[.)])|$)/gs;
+      // Accept choice markers preceded by newline OR whitespace
+      const choiceRegex = /(?:^|\n|\s)([A-F])\s*[.)]\s+([\s\S]+?)(?=(?:[\s\n]+[A-F]\s*[.)])|$)/gi;
       let choiceMatch: RegExpExecArray | null;
       while ((choiceMatch = choiceRegex.exec(cleanedBlock)) !== null) {
         const letter = choiceMatch[1].toUpperCase();
-        let choiceText = choiceMatch[2].trim().replace(/\n/g, ' ');
+        let choiceText = choiceMatch[2].trim().replace(/\s+/g, ' ');
         if (choiceText.includes('*') || choiceText.includes('✓')) {
           if (!correctAnswer) correctAnswer = letter;
           choiceText = choiceText.replace(/[*✓]/g, '').trim();
         }
-        choices[letter] = choiceText;
+        if (choiceText && !choices[letter]) choices[letter] = choiceText;
       }
 
-      if (Object.keys(choices).length === 0) {
-        const inlineRegex = /([A-D])\s*[.)]\s*([^A-D]+?)(?=\s+[A-D]\s*[.)]|$)/g;
+      if (Object.keys(choices).length < 2) {
+        const inlineRegex = /\b([A-F])\s*[.)]\s*([\s\S]+?)(?=\s+[A-F]\s*[.)]|$)/gi;
         let inlineMatch: RegExpExecArray | null;
         while ((inlineMatch = inlineRegex.exec(cleanedBlock)) !== null) {
-          choices[inlineMatch[1].toUpperCase()] = inlineMatch[2].trim();
+          const l = inlineMatch[1].toUpperCase();
+          const t = inlineMatch[2].trim();
+          if (t && !choices[l]) choices[l] = t;
         }
       }
 
@@ -502,12 +599,20 @@ export default function BulkImport({
     return questions;
   };
 
-  /** Main PDF extraction: AI-first with regex fallback */
+  /** Main PDF extraction: text/OCR + pattern detection first, AI only as a fallback. */
   const extractQuestionsFromPDF = async (file: File): Promise<any[]> => {
     try {
       const rawText = await extractPDFText(file);
-      
-      // Try AI-assisted parsing first
+
+      // Always prove extraction works before classification/specialization logic.
+      setCurrentStep('Detecting numbered questions from PDF text...');
+      const regexQuestions = regexParsePDF(rawText);
+      if (regexQuestions.length > 0) {
+        console.info(`[BulkImport] Pattern parser extracted ${regexQuestions.length} PDF questions.`);
+        return regexQuestions;
+      }
+
+      // If deterministic extraction cannot find blocks, try AI-assisted parsing.
       try {
         setCurrentStep('AI is analyzing PDF structure...');
         const { questions: aiQuestions, metadata } = await aiParsePDF(rawText);
@@ -533,30 +638,22 @@ export default function BulkImport({
         toast.info('AI parsing unavailable, using pattern-based extraction');
       }
 
-      // Fallback to regex
-      setCurrentStep('Extracting questions using pattern matching...');
-      const regexQuestions = regexParsePDF(rawText);
-      
-      if (regexQuestions.length === 0) {
-        // Last resort: paragraph-based
-        const globalMeta = extractPDFMetadata(rawText);
-        const paragraphs = rawText.split(/\n\s*\n/).filter(p => {
-          const trimmed = p.trim();
-          return trimmed.length > 10 && !isMetadataLine(trimmed);
-        });
-        return paragraphs.map(para => ({
-          Question: para.trim().substring(0, 500),
-          Type: 'short_answer',
-          Correct: '',
-          Topic: globalMeta.topic || '',
-          Category: globalMeta.category || '',
-          Specialization: globalMeta.specialization || '',
-          SubjectCode: globalMeta.subject_code || '',
-          SubjectDescription: globalMeta.subject_description || '',
-        }));
-      }
-
-      return regexQuestions;
+      // Last resort: paragraph-based extraction, still before classification.
+      const globalMeta = extractPDFMetadata(rawText);
+      const paragraphs = rawText.split(/\n\s*\n/).filter(p => {
+        const trimmed = p.trim();
+        return trimmed.length > 10 && !isMetadataLine(trimmed);
+      });
+      return paragraphs.map(para => ({
+        Question: para.trim().substring(0, 500),
+        Type: 'short_answer',
+        Correct: '',
+        Topic: globalMeta.topic || '',
+        Category: globalMeta.category || '',
+        Specialization: globalMeta.specialization || '',
+        SubjectCode: globalMeta.subject_code || '',
+        SubjectDescription: globalMeta.subject_description || '',
+      }));
     } catch (error) {
       console.error('PDF parsing error:', error);
       throw new Error('Failed to parse PDF content');
@@ -767,6 +864,23 @@ export default function BulkImport({
   const analyzeAndClassify = async () => {
     if (!file) return;
 
+    // Resolve fixed academic context from admin selections — these values are
+    // applied to EVERY question so the AI cannot generate orphan/mismatched
+    // metadata. The Question Bank filters are guaranteed to find the rows.
+    const catRow = hierarchy.categories.find(c => c.name === selectedCategory);
+    const specRow = catRow ? hierarchy.getSpecializations(catRow.id).find(s => s.name === selectedSpecialization) : undefined;
+    const subjRow = specRow ? hierarchy.getSubjects(specRow.id).find(s => s.code === selectedSubjectCode) : undefined;
+    if (!catRow || !specRow || !subjRow) {
+      toast.error('Please select Category, Specialization, and Subject before analyzing.');
+      return;
+    }
+    const fixedContext = {
+      category: catRow.name,
+      specialization: specRow.name,
+      subject_code: subjRow.code,
+      subject_description: subjRow.description,
+    };
+
     setIsProcessing(true);
     setProgress(0);
     setErrors([]);
@@ -889,99 +1003,85 @@ export default function BulkImport({
         });
       }
 
-      // ===== AI-DRIVEN TOPIC IDENTIFICATION =====
-      // Replaces manual "Topic Assignment". The AI infers a SPECIFIC lesson /
-      // sub-topic per question based on question content + subject context +
-      // selected specialization, instead of repeating the subject description.
-      setProgress(72);
+      // ===== APPLY FIXED ACADEMIC CONTEXT =====
+      // Every question inherits the admin-selected Category / Specialization /
+      // Subject. AI is NOT allowed to generate or modify these fields — this
+      // guarantees imported rows are always reachable by the Question Bank filters.
+      deduplicatedData.forEach((q) => {
+        q.category = fixedContext.category;
+        q.specialization = fixedContext.specialization;
+        q.subject_code = fixedContext.subject_code;
+        q.subject_description = fixedContext.subject_description;
+      });
+
+      // ===== AI-DRIVEN TOPIC IDENTIFICATION (single fixed context) =====
+      setProgress(78);
       setCurrentStep('Identifying specific lesson topics with AI...');
+      let topicsFromAI: string[] = [];
+      let topicWarning: string | null = null;
       try {
-        // Group questions by (subject_code, subject_description, specialization, category)
-        // so the AI gets a coherent context per batch.
-        const groups = new Map<string, { ctx: any; items: { idx: number; q: ParsedQuestion }[] }>();
-        deduplicatedData.forEach((q, idx) => {
-          const ctx = {
-            category: q.category || selectedCategory || '',
-            specialization: q.specialization || selectedSpecialization || '',
-            subject_code: q.subject_code || '',
-            subject_description: q.subject_description || '',
-          };
-          const key = JSON.stringify(ctx);
-          if (!groups.has(key)) groups.set(key, { ctx, items: [] });
-          groups.get(key)!.items.push({ idx, q });
+        const { data, error } = await supabase.functions.invoke('identify-question-topics', {
+          body: {
+            questions: deduplicatedData.map((q) => ({ question_text: q.question_text })),
+            ...fixedContext,
+            existing_topics: existingTopics,
+          },
         });
-
-        let identifiedCount = 0;
-        for (const { ctx, items } of groups.values()) {
-          const { data, error } = await supabase.functions.invoke('identify-question-topics', {
-            body: {
-              questions: items.map(({ q }) => ({ question_text: q.question_text })),
-              ...ctx,
-              existing_topics: existingTopics,
-            },
-          });
-          if (error) {
-            console.warn('Topic identification failed for group:', error);
-            continue;
-          }
-          const topics: string[] = (data?.topics || []) as string[];
-          items.forEach(({ idx }, i) => {
-            const t = (topics[i] || '').trim();
-            const subjDesc = (deduplicatedData[idx].subject_description || '').trim().toLowerCase();
-            // Reject empty topics OR topics that just echo the subject description
-            if (t && t.toLowerCase() !== subjDesc) {
-              deduplicatedData[idx].topic = t;
-              identifiedCount++;
-            }
-          });
-        }
-
-        // Final fallback: any question still without a topic gets flagged for review
-        deduplicatedData.forEach((q) => {
-          if (!q.topic || q.topic === 'General') {
-            q.topic = q.topic || 'Unclassified';
-            q.needs_review = true;
-          }
-        });
-
-        if (identifiedCount > 0) {
-          toast.info(`AI identified specific lesson topics for ${identifiedCount} question${identifiedCount === 1 ? '' : 's'}`);
-        }
+        if (error) throw error;
+        topicsFromAI = (data?.topics || []) as string[];
+        if (data?.fallback) topicWarning = data?.reason || 'AI unavailable — using heuristic topics';
       } catch (topicErr) {
         console.warn('AI topic identification unavailable:', topicErr);
-        toast.info('AI topic identification unavailable — please verify topics manually.');
+        topicWarning = 'AI topic service unavailable — using heuristic topics';
       }
 
-      setProgress(78);
-      setCurrentStep('Resolving subject metadata...');
+      // Local fallback: if AI returned nothing or fewer items than expected, derive from text
+      const deriveLocalTopic = (text: string): string => {
+        const stop = new Set(['the','a','an','of','in','on','for','to','and','or','is','are','was','were','be','by','with','as','at','from','that','this','which','what','who','when','where','how','why','it','its','their','his','her','they','them','these','those','than','then','into','about','one','two','question','following']);
+        // Try matching an existing bank topic by keyword overlap
+        const tokens = text.toLowerCase().replace(/[^\w\s-]/g, ' ').split(/\s+/).filter(w => w.length > 2 && !stop.has(w));
+        const qSet = new Set(tokens);
+        let best = { topic: '', score: 0 };
+        for (const et of existingTopics) {
+          const etTokens = et.toLowerCase().split(/\s+/).filter(w => w.length > 2 && !stop.has(w));
+          if (!etTokens.length) continue;
+          const overlap = etTokens.filter(t => qSet.has(t)).length / etTokens.length;
+          if (overlap > best.score) best = { topic: et, score: overlap };
+        }
+        if (best.score >= 0.5) return best.topic;
+        const cap = text.match(/\b([A-Z][A-Za-z0-9]*(?:\s+(?:[A-Z][A-Za-z0-9]*|\d+|de|of|the|and)){1,4})\b/);
+        if (cap) return cap[1].replace(/\s+/g, ' ').trim();
+        const top = tokens.slice(0, 3).map(w => w.charAt(0).toUpperCase() + w.slice(1)).join(' ');
+        return top || 'General Concepts';
+      };
 
-      // Resolve metadata for each question — first try the static config (legacy
-      // resolver covers fuzzy keyword inference), then SNAP every value to the
-      // exact strings from the academic_* tables that the Question Bank filter
-      // dropdowns are built from. Without this snap, "GE / Science / 102" would
-      // be saved while the filter expects e.g. "GE / Science / GE 03".
-      deduplicatedData.forEach((q) => {
-        const inferred = resolveSubjectMetadata({
-          subject: q.subject,
-          topic: q.topic,
-          subject_code: q.subject_code,
-          subject_description: q.subject_description,
-          category: q.category,
-          specialization: q.specialization,
-        });
-        const dbResolved = resolveFromDb({
-          category: inferred.category,
-          specialization: inferred.specialization,
-          subject_code: inferred.subject_code,
-          subject_description: inferred.subject_description,
-        });
-        // Prefer DB values when matched; otherwise keep best-effort inference so
-        // the admin can correct it in the Verify step.
-        q.category = dbResolved.matched ? dbResolved.category : (dbResolved.category || inferred.category);
-        q.specialization = dbResolved.matched ? dbResolved.specialization : (dbResolved.specialization || inferred.specialization);
-        q.subject_code = dbResolved.matched ? dbResolved.subject_code : '';
-        q.subject_description = dbResolved.matched ? dbResolved.subject_description : (inferred.subject_description || '');
+      const subjDescLower = fixedContext.subject_description.trim().toLowerCase();
+      const bannedTopics = new Set(['', 'general', 'unclassified', 'general concepts', 'n/a', 'none']);
+      let identifiedCount = 0;
+      deduplicatedData.forEach((q, i) => {
+        let t = (topicsFromAI[i] || '').trim();
+        const tLower = t.toLowerCase();
+        if (!t || tLower === subjDescLower || bannedTopics.has(tLower)) {
+          t = deriveLocalTopic(q.question_text);
+          q.needs_review = true;
+        } else {
+          identifiedCount++;
+        }
+        // Final guarantee: never leave topic empty in the UI
+        if (!t || bannedTopics.has(t.toLowerCase())) {
+          const words = (q.question_text || '').replace(/[^\w\s]/g, ' ').split(/\s+/).filter(w => w.length > 3).slice(0, 4);
+          t = words.length
+            ? words.map(w => w.charAt(0).toUpperCase() + w.slice(1).toLowerCase()).join(' ')
+            : `${fixedContext.subject_code} Concepts`;
+        }
+        q.topic = t;
       });
+      console.log('[BulkImport] Topics assigned. Sample:', deduplicatedData.slice(0, 5).map(q => q.topic));
+
+      if (topicWarning) toast.warning(topicWarning);
+      if (identifiedCount > 0) {
+        toast.info(`AI identified specific lesson topics for ${identifiedCount} question${identifiedCount === 1 ? '' : 's'}`);
+      }
 
       setProgress(100);
       setCurrentStep('Analysis complete');
@@ -1205,14 +1305,9 @@ export default function BulkImport({
   // Count of rows whose classification did NOT resolve to a known DB row.
   // When > 0 we block the final save so admins must fix them, guaranteeing
   // every imported question is reachable by the Question Bank filters.
-  const unresolvedCount = verificationData.filter(q => {
-    if (!q.category || !q.specialization || !q.subject_code) return true;
-    const cat = hierarchy.categories.find(c => c.name === q.category);
-    if (!cat) return true;
-    const spec = hierarchy.getSpecializations(cat.id).find(s => s.name === q.specialization);
-    if (!spec) return true;
-    return !hierarchy.getSubjects(spec.id).some(s => s.code === q.subject_code);
-  }).length;
+  // With the admin-locked academic context, every saved row is guaranteed
+  // to map to a valid Category/Specialization/Subject — no orphan rows.
+  const unresolvedCount: number = 0;
 
   return (
     <div className="space-y-6">
@@ -1342,23 +1437,22 @@ export default function BulkImport({
       {file && importStep === 'preview' && (
         <Card>
           <CardHeader>
-            <CardTitle>Specialization Assignment</CardTitle>
+            <CardTitle>Academic Context Assignment</CardTitle>
           </CardHeader>
           <CardContent>
             <p className="text-sm text-muted-foreground mb-4">
-              Choose the academic specialization these questions belong to. The AI will
-              automatically detect the correct lesson / sub-topic for each question
-              based on the question content, subject code, and specialization context —
-              you no longer need to enter a default topic.
+              Select the <strong>Category</strong>, <strong>Specialization</strong>, and <strong>Subject</strong> these
+              questions belong to. All imported questions will inherit this exact academic context — guaranteeing they
+              show up correctly in the Question Bank filters. The AI will only classify <strong>Topic</strong>, <strong>Bloom's Level</strong>, <strong>Difficulty</strong>, and <strong>Question Type</strong> within this fixed context.
             </p>
-            <div className="grid gap-4 sm:grid-cols-2">
+            <div className="grid gap-4 sm:grid-cols-3">
               <div className="space-y-2">
                 <label className="text-sm font-medium">Category</label>
                 <Select
                   value={selectedCategory}
-                  onValueChange={(v) => { setSelectedCategory(v); setSelectedSpecialization(''); }}
+                  onValueChange={(v) => { setSelectedCategory(v); setSelectedSpecialization(''); setSelectedSubjectCode(''); }}
                 >
-                  <SelectTrigger><SelectValue placeholder="Select category (e.g. Major, GE)" /></SelectTrigger>
+                  <SelectTrigger><SelectValue placeholder="Select category" /></SelectTrigger>
                   <SelectContent>
                     {hierarchy.categories.map(c => (
                       <SelectItem key={c.id} value={c.name}>{c.name}</SelectItem>
@@ -1370,11 +1464,11 @@ export default function BulkImport({
                 <label className="text-sm font-medium">Specialization</label>
                 <Select
                   value={selectedSpecialization}
-                  onValueChange={setSelectedSpecialization}
+                  onValueChange={(v) => { setSelectedSpecialization(v); setSelectedSubjectCode(''); }}
                   disabled={!selectedCategory}
                 >
                   <SelectTrigger>
-                    <SelectValue placeholder={selectedCategory ? 'Select specialization (e.g. IT, IS, CS, GE)' : 'Select a category first'} />
+                    <SelectValue placeholder={selectedCategory ? 'Select specialization' : 'Select a category first'} />
                   </SelectTrigger>
                   <SelectContent>
                     {(() => {
@@ -1382,6 +1476,28 @@ export default function BulkImport({
                       const specs = cat ? hierarchy.getSpecializations(cat.id) : [];
                       return specs.map(s => (
                         <SelectItem key={s.id} value={s.name}>{s.name}</SelectItem>
+                      ));
+                    })()}
+                  </SelectContent>
+                </Select>
+              </div>
+              <div className="space-y-2">
+                <label className="text-sm font-medium">Subject</label>
+                <Select
+                  value={selectedSubjectCode}
+                  onValueChange={setSelectedSubjectCode}
+                  disabled={!selectedSpecialization}
+                >
+                  <SelectTrigger>
+                    <SelectValue placeholder={selectedSpecialization ? 'Select subject' : 'Select a specialization first'} />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {(() => {
+                      const cat = hierarchy.categories.find(c => c.name === selectedCategory);
+                      const spec = cat ? hierarchy.getSpecializations(cat.id).find(s => s.name === selectedSpecialization) : undefined;
+                      const subs = spec ? hierarchy.getSubjects(spec.id) : [];
+                      return subs.map(s => (
+                        <SelectItem key={s.id} value={s.code}>{s.code} — {s.description}</SelectItem>
                       ));
                     })()}
                   </SelectContent>
@@ -1441,117 +1557,37 @@ export default function BulkImport({
             </CardTitle>
           </CardHeader>
           <CardContent>
+            <div className="mb-4 p-3 rounded-md border bg-muted/30 flex flex-wrap gap-2 text-sm">
+              <Badge variant="secondary">Category: {verificationData[0]?.category || '—'}</Badge>
+              <Badge variant="secondary">Specialization: {verificationData[0]?.specialization || '—'}</Badge>
+              <Badge variant="secondary">Subject: {verificationData[0]?.subject_code} — {verificationData[0]?.subject_description}</Badge>
+            </div>
             <p className="text-sm text-muted-foreground mb-4">
-              Review the auto-resolved metadata below. Click any row to edit Category, Specialization, Subject Code, or Subject Description before saving.
+              All questions inherit the locked academic context above. Review the AI-classified <strong>Topic</strong>, <strong>Bloom's Level</strong>, <strong>Difficulty</strong>, and <strong>Question Type</strong> below before saving.
             </p>
-            {unresolvedCount > 0 && (
-              <Alert variant="destructive" className="mb-4">
-                <AlertCircle className="h-4 w-4" />
-                <AlertDescription>
-                  {unresolvedCount} question{unresolvedCount === 1 ? '' : 's'} could not be matched to a Category / Specialization / Subject in the Question Bank.
-                  Fix them below — otherwise they will be saved with values the filters cannot find.
-                </AlertDescription>
-              </Alert>
-            )}
             <div className="overflow-x-auto border rounded-lg">
               <table className="w-full text-sm">
                 <thead>
                   <tr className="border-b bg-muted/50">
                     <th className="text-left p-2 font-medium w-8">#</th>
-                    <th className="text-left p-2 font-medium min-w-[200px]">Question</th>
+                    <th className="text-left p-2 font-medium min-w-[260px]">Question</th>
                     <th className="text-left p-2 font-medium">Topic</th>
                     <th className="text-left p-2 font-medium">Bloom</th>
                     <th className="text-left p-2 font-medium">Difficulty</th>
-                    <th className="text-left p-2 font-medium">Category</th>
-                    <th className="text-left p-2 font-medium">Specialization</th>
-                    <th className="text-left p-2 font-medium">Subject Code</th>
-                    <th className="text-left p-2 font-medium min-w-[180px]">Subject Description</th>
-                    <th className="text-left p-2 font-medium w-10"></th>
+                    <th className="text-left p-2 font-medium">Type</th>
                   </tr>
                 </thead>
                 <tbody>
-                  {verificationData.map((q, idx) => {
-                    const isEditing = editingIndex === idx;
-                    // DB-driven cascading options — same source as Question Bank filters.
-                    const catRow = hierarchy.categories.find(c => c.name === q.category);
-                    const availableSpecs = catRow ? hierarchy.getSpecializations(catRow.id).map(s => s.name) : [];
-                    const specRow = catRow
-                      ? hierarchy.getSpecializations(catRow.id).find(s => s.name === q.specialization)
-                      : undefined;
-                    const availableSubjects = specRow
-                      ? hierarchy.getSubjects(specRow.id).map(s => ({ code: s.code, description: s.description }))
-                      : [];
-                    const rowUnresolved =
-                      !catRow ||
-                      !specRow ||
-                      !availableSubjects.some(s => s.code === q.subject_code);
-
-                    return (
-                      <tr key={idx} className={`border-b ${isEditing ? 'bg-primary/5' : rowUnresolved ? 'bg-destructive/5 hover:bg-destructive/10' : 'hover:bg-muted/30'}`}>
-                        <td className="p-2 text-muted-foreground">
-                          {idx + 1}
-                          {rowUnresolved && (
-                            <AlertCircle className="inline h-3.5 w-3.5 ml-1 text-destructive" />
-                          )}
-                        </td>
-                        <td className="p-2 max-w-[250px] truncate" title={q.question_text}>{q.question_text}</td>
-                        <td className="p-2">{q.topic}</td>
-                        <td className="p-2 capitalize">{q.bloom_level}</td>
-                        <td className="p-2 capitalize">{q.difficulty}</td>
-                        <td className="p-2">
-                          {isEditing ? (
-                            <Select value={q.category || ''} onValueChange={(v) => updateVerificationField(idx, 'category', v)}>
-                              <SelectTrigger className="h-8 w-[100px]"><SelectValue /></SelectTrigger>
-                              <SelectContent>
-                                {categories.map(c => <SelectItem key={c} value={c}>{c}</SelectItem>)}
-                              </SelectContent>
-                            </Select>
-                          ) : (
-                            <Badge variant={catRow ? 'outline' : 'destructive'}>{q.category || '—'}</Badge>
-                          )}
-                        </td>
-                        <td className="p-2">
-                          {isEditing ? (
-                            <Select value={q.specialization || ''} onValueChange={(v) => updateVerificationField(idx, 'specialization', v)}>
-                              <SelectTrigger className="h-8 w-[100px]"><SelectValue /></SelectTrigger>
-                              <SelectContent>
-                                {availableSpecs.map(s => <SelectItem key={s} value={s}>{s}</SelectItem>)}
-                              </SelectContent>
-                            </Select>
-                          ) : (
-                            <Badge variant={specRow ? 'outline' : 'destructive'}>{q.specialization || '—'}</Badge>
-                          )}
-                        </td>
-                        <td className="p-2">
-                          {isEditing ? (
-                            <Select value={q.subject_code || ''} onValueChange={(v) => updateVerificationField(idx, 'subject_code', v)}>
-                              <SelectTrigger className="h-8 w-[100px]"><SelectValue /></SelectTrigger>
-                              <SelectContent>
-                                {availableSubjects.map(s => <SelectItem key={s.code} value={s.code}>{s.code} - {s.description}</SelectItem>)}
-                              </SelectContent>
-                            </Select>
-                          ) : (
-                            <span className={rowUnresolved && !availableSubjects.some(s => s.code === q.subject_code) ? 'text-destructive font-medium' : ''}>
-                              {q.subject_code || '—'}
-                            </span>
-                          )}
-                        </td>
-                        <td className="p-2 max-w-[180px] truncate" title={q.subject_description}>
-                          {q.subject_description || '—'}
-                        </td>
-                        <td className="p-2">
-                          <Button
-                            variant="ghost"
-                            size="sm"
-                            className="h-7 w-7 p-0"
-                            onClick={() => setEditingIndex(isEditing ? null : idx)}
-                          >
-                            <Pencil className="h-3.5 w-3.5" />
-                          </Button>
-                        </td>
-                      </tr>
-                    );
-                  })}
+                  {verificationData.map((q, idx) => (
+                    <tr key={idx} className="border-b hover:bg-muted/30">
+                      <td className="p-2 text-muted-foreground">{idx + 1}</td>
+                      <td className="p-2 max-w-[320px] truncate" title={q.question_text}>{q.question_text}</td>
+                      <td className="p-2">{q.topic && q.topic.trim() ? q.topic : <span className="italic text-muted-foreground">Needs review</span>}</td>
+                      <td className="p-2 capitalize">{q.bloom_level}</td>
+                      <td className="p-2 capitalize">{q.difficulty}</td>
+                      <td className="p-2 uppercase text-xs">{q.question_type}</td>
+                    </tr>
+                  ))}
                 </tbody>
               </table>
             </div>
@@ -1647,7 +1683,12 @@ export default function BulkImport({
       {/* Action Buttons */}
       <div className="flex gap-2">
         {importStep === 'preview' && file && !isProcessing && (
-          <Button onClick={analyzeAndClassify} className="flex-1">
+          <Button
+            onClick={analyzeAndClassify}
+            className="flex-1"
+            disabled={!selectedCategory || !selectedSpecialization || !selectedSubjectCode}
+            title={(!selectedCategory || !selectedSpecialization || !selectedSubjectCode) ? 'Select Category, Specialization, and Subject first' : undefined}
+          >
             <Sparkles className="h-4 w-4 mr-2" />
             Analyze & Classify
           </Button>
