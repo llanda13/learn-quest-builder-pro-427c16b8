@@ -1158,6 +1158,42 @@ export default function BulkImport({
         console.warn('Failed to build taxonomy matrix:', matrixError);
       }
 
+      // ===== PERSIST NEW TOPIC SUGGESTIONS INTO academic_topics =====
+      // Newly proposed topics (not matched to an approved entry) are stored in
+      // the taxonomy as `approved=false, needs_review=true` so admins can
+      // confirm them once and future Bulk Imports will reuse the canonical name.
+      try {
+        const catRow = hierarchy.categories.find(c => c.name === selectedCategory);
+        const specRow = catRow ? hierarchy.getSpecializations(catRow.id).find(s => s.name === selectedSpecialization) : undefined;
+        const subjRow = specRow ? hierarchy.getSubjects(specRow.id).find(s => s.code === selectedSubjectCode) : undefined;
+        if (subjRow) {
+          const newSuggestions = new Map<string, string>(); // normalized -> original casing
+          deduplicatedForSave.forEach((q) => {
+            const matched = (q as any).__topic_matched;
+            if (matched === false && q.topic) {
+              const key = q.topic.toLowerCase().trim();
+              if (!newSuggestions.has(key)) newSuggestions.set(key, q.topic.trim());
+            }
+          });
+          if (newSuggestions.size > 0) {
+            const rows = Array.from(newSuggestions.values()).map(name => ({
+              subject_id: subjRow.id,
+              name,
+              source: 'imported',
+              approved: false,
+              needs_review: true,
+            }));
+            const { error: topicErr } = await supabase
+              .from('academic_topics')
+              .upsert(rows, { onConflict: 'subject_id,normalized_name', ignoreDuplicates: true });
+            if (topicErr) console.warn('Topic taxonomy upsert warning:', topicErr.message);
+            else console.log(`Persisted ${rows.length} new topic suggestion(s) to academic_topics for review`);
+          }
+        }
+      } catch (taxErr) {
+        console.warn('Failed to persist new topic suggestions:', taxErr);
+      }
+
       setProgress(60);
       await Questions.bulkInsert(questionsWithDefaults);
       setProgress(100);
