@@ -43,14 +43,12 @@ export function useUserRole(): UserRoleData {
       // User can have multiple roles, take the highest priority
       if (userRoles && userRoles.length > 0) {
         const roleOrder: UserRole[] = ['admin', 'validator', 'teacher', 'student'];
-        const highestRole = roleOrder.find(r =>
+        const highestRole = roleOrder.find(r => 
           userRoles.some(ur => ur.role === r)
-        ) || null;
+        ) || 'teacher';
         setRole(highestRole);
       } else {
-        // No role assigned - do not silently grant teacher access.
-        // User must be explicitly assigned a role by an admin.
-        setRole(null);
+        setRole('teacher'); // Default role
       }
     } catch (error) {
       console.error('Error in useUserRole:', error);
