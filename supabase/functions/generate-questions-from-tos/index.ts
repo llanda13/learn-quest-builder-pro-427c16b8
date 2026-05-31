@@ -673,7 +673,9 @@ async function fillSlotsFromBank(
         if (idx > -1) availableQuestions.splice(idx, 1);
         
         registerQuestion(registry, slot.topic, slot.bloomLevel, selectedQuestion);
-        
+
+        selectedQuestion.matrix_coordinate = slot.coordinate;
+        selectedQuestion.metadata = { ...(selectedQuestion.metadata || {}), matrix_coordinate: slot.coordinate };
         slot.filled = true;
         slot.question = selectedQuestion;
         slot.source = 'bank';
