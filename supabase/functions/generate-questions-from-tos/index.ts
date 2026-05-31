@@ -1080,7 +1080,8 @@ function isGenericTemplate(text: string): boolean {
 function getQuestionRejectionReason(
   question: any,
   slot: Slot,
-  subjectCtx?: SubjectContext
+  subjectCtx?: SubjectContext,
+  registry?: GenerationRegistry
 ): string | null {
   if (!question) return 'Empty AI response for slot';
   const questionText = String(question.question_text || question.text || '').trim();
@@ -1090,6 +1091,27 @@ function getQuestionRejectionReason(
   const topicKeywords = getTopicKeywords(slot.topic);
   if (topicKeywords.length > 0 && !topicKeywords.some(keyword => lowerText.includes(keyword))) {
     return `Missing topic keyword for "${slot.topic}"`;
+  }
+
+  // Taxonomy-Based Stem Conditioning: higher-order Bloom levels MUST present a
+  // situational case, technical scenario, or analytical-constraint problem.
+  // Essays already require extended response, so skip the cue check for them.
+  if (
+    slot.questionType !== 'essay' &&
+    HIGHER_ORDER_BLOOM.has(String(slot.bloomLevel).toLowerCase()) &&
+    !hasScenarioCue(questionText)
+  ) {
+    return `Higher-order Bloom (${slot.bloomLevel}) requires a scenario/case/dataset cue in the stem`;
+  }
+
+  // Zero-Redundancy Filter: literal + semantic match against the session
+  // compiled-item blacklist. Any hit forces a fresh generation session for
+  // this coordinate.
+  if (registry && registry.compiledItemStems.length > 0) {
+    const dup = findDuplicateInBlacklist(questionText, registry.compiledItemStems, 0.72);
+    if (dup.hit) {
+      return `Duplicate/similar stem already in session blacklist (sim=${dup.similarity.toFixed(2)})`;
+    }
   }
 
   // For TECHNICAL subjects, also enforce technical-vocabulary presence and reject
