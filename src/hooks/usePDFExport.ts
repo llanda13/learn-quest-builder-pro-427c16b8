@@ -149,89 +149,154 @@ export const usePDFExport = () => {
     try {
       // Use the print template element if available (same layout as print)
       const printElement = document.querySelector('.print-exam-only') as HTMLElement;
-      
+
       if (printElement) {
-        // Temporarily show the print element for capture
-        const originalDisplay = printElement.style.display;
+        // Temporarily make the print element visible & sized for capture
+        const original = {
+          display: printElement.style.display,
+          position: printElement.style.position,
+          left: printElement.style.left,
+          top: printElement.style.top,
+          background: printElement.style.background,
+          width: printElement.style.width,
+          padding: printElement.style.padding,
+          fontFamily: printElement.style.fontFamily,
+          zIndex: printElement.style.zIndex,
+        };
         printElement.style.display = 'block';
-        printElement.style.position = 'relative';
+        printElement.style.position = 'fixed';
+        printElement.style.left = '-10000px';
+        printElement.style.top = '0';
         printElement.style.background = 'white';
         printElement.style.width = '210mm';
-        printElement.style.padding = '15mm';
+        printElement.style.padding = '0';
         printElement.style.fontFamily = '"Times New Roman", Times, serif';
+        printElement.style.zIndex = '-1';
 
+        // A4 page in mm
         const pdf = new jsPDF('p', 'mm', 'a4');
-        const pdfW = pdf.internal.pageSize.getWidth();
-        const pdfH = pdf.internal.pageSize.getHeight();
-        const mx = 10, my = 8;
-        const usableW = pdfW - mx * 2;
-        const usableH = pdfH - my * 2;
-        let hasContent = false;
+        const pdfW = pdf.internal.pageSize.getWidth();   // 210
+        const pdfH = pdf.internal.pageSize.getHeight();  // 297
+        const marginX = 12;
+        const marginY = 12;
+        const usableW = pdfW - marginX * 2;
+        const usableH = pdfH - marginY * 2;
+        const blockGapMM = 2;
 
-        const exportSections = Array.from(printElement.querySelectorAll<HTMLElement>('[data-pdf-section]'));
-        const sectionsToCapture = exportSections.length > 0 ? exportSections : [printElement];
+        const SCALE = 2; // crisp vector-like text
+        let currentY = marginY;
+        
 
-        try {
-        for (const section of sectionsToCapture) {
-          const isAnswerKey = section.dataset.pdfSection === 'answer-key' || section.classList.contains('answer-key-section');
-          const captureWidth = Math.ceil(section.scrollWidth || section.offsetWidth);
-          const captureHeight = Math.ceil(isAnswerKey ? section.offsetHeight : section.scrollHeight);
-          const canvas = await html2canvas(section, {
-            scale: 1.5,
+        const captureBlock = async (el: HTMLElement) => {
+          // Force layout to settle and ensure the node has measurable size
+          const w = Math.ceil(el.scrollWidth || el.offsetWidth || printElement.clientWidth);
+          const h = Math.ceil(el.scrollHeight || el.offsetHeight);
+          if (h <= 0 || w <= 0) return null;
+          return await html2canvas(el, {
+            scale: SCALE,
             useCORS: true,
             backgroundColor: '#ffffff',
-            width: captureWidth,
-            height: captureHeight,
+            width: w,
+            height: h,
+            windowWidth: w,
+            scrollX: 0,
+            scrollY: 0,
           });
+        };
 
-          if (isAnswerKey) {
-            if (hasContent) pdf.addPage();
-            const naturalH = (canvas.height * usableW) / canvas.width;
-            const fitScale = Math.min(1, usableH / naturalH);
-            const renderW = usableW * fitScale;
-            const renderH = naturalH * fitScale;
-            const x = mx + (usableW - renderW) / 2;
-            const y = my + (usableH - renderH) / 2;
-            pdf.addImage(canvas.toDataURL('image/jpeg', 0.75), 'JPEG', x, y, renderW, renderH, undefined, 'FAST');
-            hasContent = true;
-            continue;
+        const placeCanvas = (canvas: HTMLCanvasElement) => {
+          // Convert from canvas px to mm based on locked content width
+          const renderW = usableW;
+          const renderH = (canvas.height * renderW) / canvas.width;
+          const remaining = pdfH - marginY - currentY;
+
+          // If the block fits — place it on the current page
+          if (renderH <= remaining + 0.01) {
+            pdf.addImage(canvas.toDataURL('image/png'), 'PNG', marginX, currentY, renderW, renderH, undefined, 'FAST');
+            currentY += renderH + blockGapMM;
+            return;
           }
 
-          const imgH = (canvas.height * usableW) / canvas.width;
+          // Block does not fit on current page
+          if (renderH <= usableH) {
+            // Move whole block to a fresh page (avoids splitting questions)
+            pdf.addPage();
+            currentY = marginY;
+            pdf.addImage(canvas.toDataURL('image/png'), 'PNG', marginX, currentY, renderW, renderH, undefined, 'FAST');
+            currentY += renderH + blockGapMM;
+            return;
+          }
 
-          if (imgH <= usableH) {
-            if (hasContent) pdf.addPage();
-            pdf.addImage(canvas.toDataURL('image/jpeg', 0.75), 'JPEG', mx, my, usableW, imgH, undefined, 'FAST');
-            hasContent = true;
-          } else {
-            let remaining = imgH, srcY = 0;
-            const ratio = canvas.width / usableW;
-            while (remaining > 0) {
-              if (hasContent || srcY > 0) pdf.addPage();
-              const sliceH = Math.min(remaining, usableH);
-              const srcSliceH = sliceH * ratio;
-              const sc = document.createElement('canvas');
-              sc.width = canvas.width;
-              sc.height = srcSliceH;
-              const ctx = sc.getContext('2d');
-              if (ctx) {
-                ctx.fillStyle = '#ffffff';
-                ctx.fillRect(0, 0, sc.width, sc.height);
-                ctx.drawImage(canvas, 0, srcY, canvas.width, srcSliceH, 0, 0, canvas.width, srcSliceH);
-                pdf.addImage(sc.toDataURL('image/jpeg', 0.75), 'JPEG', mx, my, usableW, sliceH, undefined, 'FAST');
-              }
-              hasContent = true;
-              srcY += srcSliceH;
-              remaining -= usableH;
+          // Block is taller than a full page — must slice (rare; only oversized header)
+          const ratio = canvas.width / renderW;
+          let srcY = 0;
+          let leftMM = renderH;
+          let firstSlice = true;
+          while (leftMM > 0) {
+            const availMM = firstSlice ? remaining : usableH;
+            if (!firstSlice || (firstSlice && remaining < usableH * 0.25)) {
+              pdf.addPage();
+              currentY = marginY;
+            }
+            const sliceMM = Math.min(leftMM, firstSlice ? availMM : usableH);
+            const srcSliceH = Math.min(canvas.height - srcY, sliceMM * ratio);
+            const sc = document.createElement('canvas');
+            sc.width = canvas.width;
+            sc.height = srcSliceH;
+            const ctx = sc.getContext('2d');
+            if (ctx) {
+              ctx.fillStyle = '#ffffff';
+              ctx.fillRect(0, 0, sc.width, sc.height);
+              ctx.drawImage(canvas, 0, srcY, canvas.width, srcSliceH, 0, 0, canvas.width, srcSliceH);
+              pdf.addImage(sc.toDataURL('image/png'), 'PNG', marginX, currentY, renderW, sliceMM, undefined, 'FAST');
+            }
+            srcY += srcSliceH;
+            currentY += sliceMM;
+            leftMM -= sliceMM;
+            firstSlice = false;
+          }
+          currentY += blockGapMM;
+        };
+
+        try {
+          // Collect blocks in document order; fall back to whole sections if none marked
+          const blocks = Array.from(printElement.querySelectorAll<HTMLElement>('[data-pdf-block]'));
+          const questionBlocks = blocks.length > 0 ? blocks : Array.from(printElement.querySelectorAll<HTMLElement>('[data-pdf-section="questions"]'));
+
+          for (const block of questionBlocks) {
+            const canvas = await captureBlock(block);
+            if (!canvas) continue;
+            placeCanvas(canvas);
+            
+          }
+
+          // Answer key — always on a new page, centered
+          const answerKey = printElement.querySelector<HTMLElement>('[data-pdf-section="answer-key"]');
+          if (answerKey) {
+            pdf.addPage();
+            currentY = marginY;
+            const canvas = await captureBlock(answerKey);
+            if (canvas) {
+              const naturalH = (canvas.height * usableW) / canvas.width;
+              const fitScale = Math.min(1, usableH / naturalH);
+              const renderW = usableW * fitScale;
+              const renderH = naturalH * fitScale;
+              const x = marginX + (usableW - renderW) / 2;
+              const y = marginY + (usableH - renderH) / 2;
+              pdf.addImage(canvas.toDataURL('image/png'), 'PNG', x, y, renderW, renderH, undefined, 'FAST');
             }
           }
-        }
         } finally {
-          // Restore original display
-          printElement.style.display = originalDisplay;
-          printElement.style.position = '';
-          printElement.style.width = '';
-          printElement.style.padding = '';
+          // Restore original styles
+          printElement.style.display = original.display;
+          printElement.style.position = original.position;
+          printElement.style.left = original.left;
+          printElement.style.top = original.top;
+          printElement.style.background = original.background;
+          printElement.style.width = original.width;
+          printElement.style.padding = original.padding;
+          printElement.style.fontFamily = original.fontFamily;
+          printElement.style.zIndex = original.zIndex;
         }
 
         // Add watermarks if version label and test ID are provided
@@ -239,7 +304,7 @@ export const usePDFExport = () => {
           const watermarkCode = generateWatermarkCode(testId, versionLabel, studentId);
           const totalPages = pdf.getNumberOfPages();
           const pages = Array.from({ length: totalPages }, (_, i) => i + 1);
-          
+
           addWatermarkToPDF(pdf, {
             testId,
             versionLabel,
@@ -248,7 +313,7 @@ export const usePDFExport = () => {
             uniqueCode: watermarkCode,
             timestamp: new Date()
           }, pages);
-          
+
           await logSecurityEvent('export', testId, {
             version_label: versionLabel,
             student_id: studentId,
@@ -260,7 +325,7 @@ export const usePDFExport = () => {
 
         const filename = `${testTitle.toLowerCase().replace(/\s+/g, '-')}${versionLabel ? `-version-${versionLabel}` : ''}${studentName ? `-${studentName.toLowerCase().replace(/\s+/g, '-')}` : ''}.pdf`;
         const blob = pdf.output('blob');
-        
+
         if (uploadToCloud) {
           try {
             const { storageUrl } = await uploadToStorage(blob, filename, 'tests');

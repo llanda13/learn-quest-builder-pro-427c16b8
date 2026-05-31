@@ -24,6 +24,7 @@ interface ExamPrintTemplateProps {
     year_section?: string;
     exam_period?: string;
     school_year?: string;
+    semester?: string;
     time_limit?: number;
     instructions?: string;
     items?: TestItem[];
@@ -121,7 +122,8 @@ export function ExamPrintTemplate({ test, showAnswerKey = false }: ExamPrintTemp
   return (
     <div className="print-exam-only" style={{ fontFamily: '"Times New Roman", Times, serif' }}>
       <section className="questionnaire-section" data-pdf-section="questions">
-        {/* ISO Document Header */}
+        {/* HEADER BLOCK — kept atomic for stable pagination */}
+        <div data-pdf-block="header" style={{ breakInside: 'avoid', pageBreakInside: 'avoid' }}>
         <ISODocumentHeader
           docNo="F-DOI-018"
           effectiveDate="08/25/2017"
@@ -149,7 +151,7 @@ export function ExamPrintTemplate({ test, showAnswerKey = false }: ExamPrintTemp
 
       {/* Academic Year */}
       <div style={{ textAlign: 'center', fontSize: '11pt', marginBottom: '4pt' }}>
-        Academic Year: {test.school_year || '2025 – 2026'}: 1<sup>st</sup> Semester
+        Academic Year: {test.school_year || '____ – ____'}{test.semester ? `: ${test.semester}` : ''}
       </div>
 
       {/* Subject */}
@@ -192,14 +194,16 @@ export function ExamPrintTemplate({ test, showAnswerKey = false }: ExamPrintTemp
       <p style={{ fontSize: '10pt', textAlign: 'justify', marginBottom: '12pt' }}>
         Read and analyze each of the following questions carefully. Write the <strong>CAPITAL LETTER</strong> of your choice on the space provided. <u>NOTE</u>: Do not use sticky tape or any kind of eraser fluid to change your answers. <em>MODIFIED/ERASURES IN ANSWERS ARE CONSIDERED WRONG.</em>
       </p>
+      </div>
+      {/* /HEADER BLOCK */}
 
       {/* Question Sections */}
       {sections.map((section, sIdx) => {
         const startNum = sections.slice(0, sIdx).reduce((sum, s) => sum + s.items.length, 0) + 1;
         return (
           <div key={sIdx} className="exam-section" style={{ marginTop: sIdx > 0 ? '14pt' : '0' }}>
-            {/* Section Header */}
-            <div style={{ marginBottom: '6pt' }}>
+            {/* Section Header — atomic block */}
+            <div data-pdf-block={`section-header-${sIdx}`} style={{ marginBottom: '6pt', breakInside: 'avoid', pageBreakInside: 'avoid' }}>
               <p style={{ fontSize: '11pt', fontWeight: 'bold', textDecoration: 'underline', marginBottom: '2pt' }}>
                 {section.label}:
               </p>
@@ -208,17 +212,18 @@ export function ExamPrintTemplate({ test, showAnswerKey = false }: ExamPrintTemp
               </p>
             </div>
 
-            {/* Questions */}
+            {/* Questions — each one is its own atomic block */}
             {section.items.map((item, qIdx) => {
               const num = startNum + qIdx;
               return (
-                <ISOQuestion
-                  key={qIdx}
-                  item={item}
-                  number={num}
-                  type={section.type}
-                  showAnswer={showAnswerKey}
-                />
+                <div key={qIdx} data-pdf-block={`q-${sIdx}-${qIdx}`} style={{ breakInside: 'avoid', pageBreakInside: 'avoid' }}>
+                  <ISOQuestion
+                    item={item}
+                    number={num}
+                    type={section.type}
+                    showAnswer={showAnswerKey}
+                  />
+                </div>
               );
             })}
           </div>
@@ -226,7 +231,7 @@ export function ExamPrintTemplate({ test, showAnswerKey = false }: ExamPrintTemp
       })}
 
         {/* Prepared by */}
-        <div style={{ marginTop: '30pt', fontSize: '11pt' }}>
+        <div data-pdf-block="prepared-by" style={{ marginTop: '30pt', fontSize: '11pt', breakInside: 'avoid', pageBreakInside: 'avoid' }}>
           <div>Prepared by:</div>
           <div style={{ marginTop: '20pt', fontWeight: 'bold', textTransform: 'uppercase' }}>
             {test.prepared_by || '________________________'}

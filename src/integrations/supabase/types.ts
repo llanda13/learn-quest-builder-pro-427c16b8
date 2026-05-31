@@ -627,6 +627,7 @@ export type Database = {
           points_per_question: number | null
           question_order: Json | null
           school_year: string | null
+          semester: string | null
           shuffle_choices: boolean | null
           shuffle_questions: boolean | null
           shuffle_seed: string | null
@@ -652,6 +653,7 @@ export type Database = {
           points_per_question?: number | null
           question_order?: Json | null
           school_year?: string | null
+          semester?: string | null
           shuffle_choices?: boolean | null
           shuffle_questions?: boolean | null
           shuffle_seed?: string | null
@@ -677,6 +679,7 @@ export type Database = {
           points_per_question?: number | null
           question_order?: Json | null
           school_year?: string | null
+          semester?: string | null
           shuffle_choices?: boolean | null
           shuffle_questions?: boolean | null
           shuffle_seed?: string | null
@@ -1998,6 +2001,7 @@ export type Database = {
           owner: string | null
           prepared_by: string
           school_year: string
+          semester: string | null
           subject_no: string | null
           title: string
           topics: Json | null
@@ -2020,6 +2024,7 @@ export type Database = {
           owner?: string | null
           prepared_by: string
           school_year: string
+          semester?: string | null
           subject_no?: string | null
           title: string
           topics?: Json | null
@@ -2042,6 +2047,7 @@ export type Database = {
           owner?: string | null
           prepared_by?: string
           school_year?: string
+          semester?: string | null
           subject_no?: string | null
           title?: string
           topics?: Json | null
