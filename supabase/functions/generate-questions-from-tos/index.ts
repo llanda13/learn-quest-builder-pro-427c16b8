@@ -727,6 +727,9 @@ function registerQuestion(
 ): void {
   const text = question.question_text?.toLowerCase() || '';
   registry.usedQuestionTexts.push(text);
+  // Zero-Redundancy Filter: every accepted stem is added to the compiled-item
+  // blacklist used by subsequent per-slot validation.
+  if (text) registry.compiledItemStems.push(text);
   
   const concept = question.targeted_concept || extractConcept(text);
   if (concept) {
