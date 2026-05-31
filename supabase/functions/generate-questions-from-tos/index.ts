@@ -2161,7 +2161,8 @@ serve(async (req) => {
       usedConcepts: {},
       usedOperations: {},
       usedPairs: [],
-      usedQuestionTexts: []
+      usedQuestionTexts: [],
+      compiledItemStems: []
     };
 
     // STEP 1: Expand TOS into slots with question types
