@@ -534,7 +534,8 @@ function expandTOSToSlots(distributions: TopicDistribution[], totalItems: number
             knowledgeDimension,
             questionType,
             points,
-            filled: false
+            filled: false,
+            coordinate: { topic, cognitive_level: bloom, index: slotId - 1 }
           });
         }
       }
