@@ -2361,16 +2361,21 @@ serve(async (req) => {
       // If we can't identify unfilled slots, create generic MCQ slots for the shortfall
       const slotsToFill = unfilledSlots.length > 0 
         ? unfilledSlots.slice(0, shortfall)
-        : Array.from({ length: shortfall }, (_, i) => ({
-            id: `repair_slot_${completionAttempts}_${i}`,
-            topic: body.distributions[0]?.topic || 'General',
-            bloomLevel: ['remembering', 'understanding', 'applying'][i % 3],
-            difficulty: ['easy', 'average', 'difficult'][i % 3],
-            knowledgeDimension: 'conceptual',
-            questionType: 'mcq' as const,
-            points: 1,
-            filled: false
-          }));
+        : Array.from({ length: shortfall }, (_, i) => {
+            const topic = body.distributions[0]?.topic || 'General';
+            const bloom = ['remembering', 'understanding', 'applying'][i % 3];
+            return {
+              id: `repair_slot_${completionAttempts}_${i}`,
+              topic,
+              bloomLevel: bloom,
+              difficulty: ['easy', 'average', 'difficult'][i % 3],
+              knowledgeDimension: 'conceptual',
+              questionType: 'mcq' as const,
+              points: 1,
+              filled: false,
+              coordinate: { topic, cognitive_level: bloom, index: -1 }
+            };
+          });
       
       console.log(`   🎯 Generating ${slotsToFill.length} repair questions...`);
       
