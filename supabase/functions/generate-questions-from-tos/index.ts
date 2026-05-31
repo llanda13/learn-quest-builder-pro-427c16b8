@@ -1502,8 +1502,12 @@ Question ${idx + 1}:
   };
   
   const subjectAnchor = subjectCtx ? renderSubjectAnchor(subjectCtx) + '\n\n' : '';
+  const isHigherOrder = HIGHER_ORDER_BLOOM.has(bloom.toLowerCase());
+  const scenarioDirective = isHigherOrder
+    ? `\n\n🎯 MANDATORY STEM CONDITIONING (${bloom}): Every stem MUST open with a situational case, technical scenario, dataset/code excerpt, or analytical constraint problem (e.g., "Given the following…", "In a scenario where…", "Consider a system that…", "Based on the dataset below…"). Stems without a scenario cue will be REJECTED and regenerated.\n`
+    : '';
 
-  const prompt = `${subjectAnchor}Generate ${intents.length} PROFESSIONAL Multiple Choice Questions for an academic examination.
+  const prompt = `${subjectAnchor}${scenarioDirective}Generate ${intents.length} PROFESSIONAL Multiple Choice Questions for an academic examination.
 
 🚨 ABSOLUTE REQUIREMENT: REAL CONTENT ONLY - NO PLACEHOLDERS 🚨
 
