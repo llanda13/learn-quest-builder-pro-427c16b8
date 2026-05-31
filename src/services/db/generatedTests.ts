@@ -8,6 +8,7 @@ export interface GeneratedTest {
   year_section?: string;
   exam_period?: string;
   school_year?: string;
+  semester?: string;
   instructions?: string;
   tos_id?: string;
   time_limit?: number;
@@ -34,6 +35,7 @@ export const GeneratedTests = {
       year_section: payload.year_section,
       exam_period: payload.exam_period,
       school_year: payload.school_year,
+      semester: payload.semester,
       instructions: payload.instructions,
       tos_id: payload.tos_id,
       time_limit: payload.time_limit,
@@ -68,6 +70,7 @@ export const GeneratedTests = {
       year_section: payload.year_section,
       exam_period: payload.exam_period,
       school_year: payload.school_year,
+      semester: payload.semester,
       instructions: payload.instructions,
       tos_id: payload.tos_id,
       time_limit: payload.time_limit,
@@ -102,6 +105,7 @@ export const GeneratedTests = {
       year_section: config.year_section,
       exam_period: config.exam_period,
       school_year: config.school_year,
+      semester: config.semester,
       instructions: config.instructions,
       tos_id: config.tos_id,
       time_limit: config.time_limit,

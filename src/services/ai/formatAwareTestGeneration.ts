@@ -282,6 +282,7 @@ export async function generateFormatAwareTest(
     year_section: config.testMetadata?.year_section || null,
     exam_period: config.testMetadata?.exam_period || null,
     school_year: config.testMetadata?.school_year || null,
+    semester: config.testMetadata?.semester || null,
     items: allQuestions as unknown as any,
     answer_key: answerKey as unknown as any,
     tos_id: config.testMetadata?.tos_id || null,

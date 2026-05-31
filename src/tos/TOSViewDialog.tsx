@@ -28,6 +28,7 @@ interface TOSData {
   year_section: string | null;
   exam_period: string | null;
   school_year: string | null;
+  semester?: string | null;
   total_items: number | null;
   prepared_by?: string | null;
   checked_by?: string | null;
@@ -288,6 +289,12 @@ export function TOSViewDialog({ open, onOpenChange, tos }: TOSViewDialogProps) {
                 <span>Course: </span>
                 <span style={{ textDecoration: 'underline' }}>
                   {tos.course || '_______________'}
+                </span>
+              </div>
+              <div>
+                <span>School Year / Semester: </span>
+                <span style={{ textDecoration: 'underline' }}>
+                  {[tos.school_year, tos.semester].filter(Boolean).join(' – ') || '_______________'}
                 </span>
               </div>
             </div>

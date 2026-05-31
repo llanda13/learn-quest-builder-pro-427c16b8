@@ -9,6 +9,7 @@ export interface TOSEntry {
   year_section: string;
   exam_period: string;
   school_year: string;
+  semester?: string;
   total_items: number;
   prepared_by: string;
   checked_by?: string;
