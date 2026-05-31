@@ -341,6 +341,58 @@ export default function BulkImport({
     return false;
   };
 
+  /** Blacklist of instructional / directional phrases that are NOT questions. */
+  const INSTRUCTION_PATTERNS: RegExp[] = [
+    /\bread\s+(?:and\s+)?(?:analyze|understand|carefully)\b/i,
+    /\bchoose\s+the\s+(?:correct|best|most)\b/i,
+    /\bselect\s+the\s+(?:correct|best|most|letter)\b/i,
+    /\bencircle\s+the\b/i,
+    /\bunderline\s+the\b/i,
+    /\bwrite\s+(?:your\s+)?(?:answer|the\s+letter)\b/i,
+    /\bshade\s+the\s+(?:circle|letter|box)\b/i,
+    /\b(?:general\s+)?direction[s]?\s*[:\-]/i,
+    /\binstruction[s]?\s*[:\-]/i,
+    /\bnote\s*to\s*(?:students?|examinees?)\s*[:\-]/i,
+    /\breminder[s]?\s*[:\-]/i,
+    /\bmultiple\s+choice\s*[:\-]/i,
+    /\btrue\s+or\s+false\s*[:\-]/i,
+    /\bidentification\s*[:\-]/i,
+    /\bessay\s*[:\-]/i,
+    /\bpart\s+[ivx\d]+\s*[:\-.]/i,
+    /\b(?:test|exam)\s+(?:proper|i+|paper)\s*[:\-]?/i,
+    /\bgood\s+luck\b/i,
+    /\bdo\s+not\s+(?:write|turn|open)\b/i,
+    /\busing\s+(?:a\s+)?(?:pencil|pen|black\s+ink)\b/i,
+    /\bstrictly\s+no\b/i,
+    /\b(?:answer|fill\s+in)\s+the\s+following\b/i,
+    /\bon\s+the\s+space\s+provided\b/i,
+    /\b(?:republic|department)\s+of\s+the\s+philippines\b/i,
+    /\bname\s*[:\-_]+\s*$/i,
+    /\b(?:school\s+year|semester|midterm|finals?|prelim|quiz|examination)\b.*[:\-]/i,
+  ];
+
+  /** Returns true if the text looks like an instruction/header rather than a real question. */
+  const isInstructionalText = (text: string): boolean => {
+    const trimmed = text.trim();
+    if (!trimmed) return true;
+    // Test the first ~200 chars (instructions usually appear at the start)
+    const head = trimmed.substring(0, 240);
+    if (INSTRUCTION_PATTERNS.some((re) => re.test(head))) return true;
+
+    // Must show some assessment intent: question mark, MCQ choices already attached,
+    // an "Answer:" marker, an interrogative starter, or a fill-in blank.
+    const hasInterrogative =
+      /\?/.test(trimmed) ||
+      /\b(what|which|who|whom|whose|where|when|why|how|identify|define|differentiate|compare|explain|describe|list|enumerate|true\s+or\s+false|state|give|name|calculate|compute|solve|determine)\b/i.test(
+        trimmed.substring(0, 120)
+      ) ||
+      /_{3,}/.test(trimmed) ||
+      /\b(answer|correct\s*answer)\s*:/i.test(trimmed);
+
+    if (!hasInterrogative) return true;
+    return false;
+  };
+
   /** Extract global metadata from non-question text in the PDF */
   const extractPDFMetadata = (text: string): Record<string, string> => {
     const metadata: Record<string, string> = {};
@@ -581,6 +633,12 @@ export default function BulkImport({
         questionType = questionText.length > 100 ? 'essay' : 'short_answer';
       }
 
+      // Reject instructional / directional text before classification
+      if (isInstructionalText(questionText)) {
+        console.info('[BulkImport] Rejected instructional block:', questionText.substring(0, 80));
+        continue;
+      }
+
       const validatedAnswer = choiceCount > 0 ? validateCorrectAnswer(correctAnswer, choices) : '';
 
       questions.push({
@@ -618,20 +676,22 @@ export default function BulkImport({
         const { questions: aiQuestions, metadata } = await aiParsePDF(rawText);
         
         if (aiQuestions.length > 0) {
-          // Convert AI output to standard format
-          return aiQuestions.map((q: any) => ({
-            Question: q.question_text,
-            Type: q.question_type || 'mcq',
-            ...(q.choices || {}),
-            Correct: q.correct_answer || '',
-            Topic: q.topic || '',
-            Bloom: q.bloom_level || '',
-            Difficulty: q.difficulty || '',
-            Category: metadata.category || '',
-            Specialization: metadata.specialization || '',
-            SubjectCode: metadata.subject_code || '',
-            SubjectDescription: metadata.subject_description || '',
-          }));
+          // Convert AI output to standard format, filtering instructional text
+          return aiQuestions
+            .filter((q: any) => q.question_text && !isInstructionalText(q.question_text))
+            .map((q: any) => ({
+              Question: q.question_text,
+              Type: q.question_type || 'mcq',
+              ...(q.choices || {}),
+              Correct: q.correct_answer || '',
+              Topic: q.topic || '',
+              Bloom: q.bloom_level || '',
+              Difficulty: q.difficulty || '',
+              Category: metadata.category || '',
+              Specialization: metadata.specialization || '',
+              SubjectCode: metadata.subject_code || '',
+              SubjectDescription: metadata.subject_description || '',
+            }));
         }
       } catch (aiErr) {
         console.warn('AI parsing failed, using regex fallback:', aiErr);
@@ -642,7 +702,7 @@ export default function BulkImport({
       const globalMeta = extractPDFMetadata(rawText);
       const paragraphs = rawText.split(/\n\s*\n/).filter(p => {
         const trimmed = p.trim();
-        return trimmed.length > 10 && !isMetadataLine(trimmed);
+        return trimmed.length > 10 && !isMetadataLine(trimmed) && !isInstructionalText(trimmed);
       });
       return paragraphs.map(para => ({
         Question: para.trim().substring(0, 500),
@@ -1015,58 +1075,19 @@ export default function BulkImport({
         q.subject_description = fixedContext.subject_description;
       });
 
-      // ===== TAXONOMY-VALIDATED TOPIC IDENTIFICATION =====
-      // The edge function reconciles every AI suggestion against the
-      // `academic_topics` table for the chosen subject. Topics that don't match
-      // an approved entry are either snapped to the nearest valid topic
-      // (trigram similarity) or kept as a needs_review suggestion.
-      setProgress(78);
-      setCurrentStep('Validating topics against academic taxonomy...');
-      type Resolution = { topic: string; topic_id: string | null; matched: boolean; confidence: number; needs_review: boolean; source: string };
-      let resolutions: Resolution[] = [];
-      let topicWarning: string | null = null;
-      let taxonomySize = 0;
-      try {
-        const { data, error } = await supabase.functions.invoke('identify-question-topics', {
-          body: {
-            questions: deduplicatedData.map((q) => ({ question_text: q.question_text })),
-            subject_id: fixedSubjectId,
-            ...fixedContext,
-          },
-        });
-        if (error) throw error;
-        resolutions = (data?.resolutions || []) as Resolution[];
-        taxonomySize = data?.taxonomy_size || 0;
-        if (data?.ai_available === false) topicWarning = 'AI service unavailable — topics validated against taxonomy only';
-      } catch (topicErr) {
-        console.warn('Topic identification unavailable:', topicErr);
-        topicWarning = 'Topic validation service unavailable — items flagged for review';
-      }
-
-      let matchedCount = 0;
-      let suggestedCount = 0;
-      deduplicatedData.forEach((q, i) => {
-        const r = resolutions[i];
-        if (r) {
-          q.topic = r.topic;
-          // Track taxonomy resolution metadata for downstream save logic
-          (q as any).__topic_id = r.topic_id;
-          (q as any).__topic_matched = r.matched;
-          (q as any).__topic_source = r.source;
-          q.needs_review = r.needs_review || q.needs_review;
-          if (r.matched) matchedCount++; else suggestedCount++;
-        } else {
-          q.topic = `${fixedContext.subject_code} Concepts`;
-          q.needs_review = true;
-          (q as any).__topic_matched = false;
-          (q as any).__topic_source = 'fallback';
-        }
+      // ===== TOPIC IDENTIFICATION INTENTIONALLY SKIPPED DURING BULK IMPORT =====
+      // Topic classification has been removed from the Analyze & Classify step
+      // to eliminate AI hallucination and inconsistent labels. Questions are
+      // stored under their validated subject metadata only; Topic alignment is
+      // performed dynamically at Test Questionnaire generation time via
+      // semantic similarity against the TOS taxonomy.
+      deduplicatedData.forEach((q) => {
+        q.topic = '';
+        (q as any).__topic_id = null;
+        (q as any).__topic_matched = false;
+        (q as any).__topic_source = 'deferred';
       });
-      console.log(`[BulkImport] Topic validation: ${matchedCount} matched / ${suggestedCount} new suggestions (taxonomy size: ${taxonomySize})`);
-
-      if (topicWarning) toast.warning(topicWarning);
-      if (matchedCount > 0) toast.success(`${matchedCount} question${matchedCount === 1 ? '' : 's'} mapped to approved taxonomy`);
-      if (suggestedCount > 0) toast.info(`${suggestedCount} new topic suggestion${suggestedCount === 1 ? '' : 's'} flagged for admin review`);
+      console.log('[BulkImport] Topic classification deferred to test-generation time');
 
 
       setProgress(100);
@@ -1132,7 +1153,8 @@ export default function BulkImport({
       }
 
       const questionsWithDefaults = deduplicatedForSave.map(q => ({
-        topic: q.topic || 'Unclassified',
+        // Topic intentionally left empty — assigned dynamically during test generation
+        topic: (q.topic && q.topic.trim()) ? q.topic : '',
         question_text: stripQuestionPrefix(q.question_text || ''),
         question_type: (q.question_type as 'mcq' | 'true_false' | 'essay' | 'short_answer') || 'mcq',
         choices: q.choices || {},
@@ -1158,41 +1180,8 @@ export default function BulkImport({
         console.warn('Failed to build taxonomy matrix:', matrixError);
       }
 
-      // ===== PERSIST NEW TOPIC SUGGESTIONS INTO academic_topics =====
-      // Newly proposed topics (not matched to an approved entry) are stored in
-      // the taxonomy as `approved=false, needs_review=true` so admins can
-      // confirm them once and future Bulk Imports will reuse the canonical name.
-      try {
-        const catRow = hierarchy.categories.find(c => c.name === selectedCategory);
-        const specRow = catRow ? hierarchy.getSpecializations(catRow.id).find(s => s.name === selectedSpecialization) : undefined;
-        const subjRow = specRow ? hierarchy.getSubjects(specRow.id).find(s => s.code === selectedSubjectCode) : undefined;
-        if (subjRow) {
-          const newSuggestions = new Map<string, string>(); // normalized -> original casing
-          deduplicatedForSave.forEach((q) => {
-            const matched = (q as any).__topic_matched;
-            if (matched === false && q.topic) {
-              const key = q.topic.toLowerCase().trim();
-              if (!newSuggestions.has(key)) newSuggestions.set(key, q.topic.trim());
-            }
-          });
-          if (newSuggestions.size > 0) {
-            const rows = Array.from(newSuggestions.values()).map(name => ({
-              subject_id: subjRow.id,
-              name,
-              source: 'imported',
-              approved: false,
-              needs_review: true,
-            }));
-            const { error: topicErr } = await supabase
-              .from('academic_topics')
-              .upsert(rows, { onConflict: 'subject_id,normalized_name', ignoreDuplicates: true });
-            if (topicErr) console.warn('Topic taxonomy upsert warning:', topicErr.message);
-            else console.log(`Persisted ${rows.length} new topic suggestion(s) to academic_topics for review`);
-          }
-        }
-      } catch (taxErr) {
-        console.warn('Failed to persist new topic suggestions:', taxErr);
-      }
+      // Topic suggestion persistence removed — topics are no longer assigned at import time.
+
 
       setProgress(60);
       await Questions.bulkInsert(questionsWithDefaults);
@@ -1369,7 +1358,7 @@ export default function BulkImport({
         </CardHeader>
         <CardContent>
           <p className="text-sm text-muted-foreground mb-2">
-            Download our CSV template to ensure your data is formatted correctly. The template includes columns for <strong>Category</strong>, <strong>Specialization</strong>, <strong>Subject Code</strong>, and <strong>Subject Description</strong>. <strong>Topic</strong> is optional — when omitted, the AI will detect the specific lesson/competency for each question automatically based on the question content and specialization context.
+            Download our CSV template to ensure your data is formatted correctly. The template includes columns for <strong>Category</strong>, <strong>Specialization</strong>, <strong>Subject Code</strong>, and <strong>Subject Description</strong>. Topics are no longer assigned at import time — they are resolved automatically during Test Questionnaire generation by matching TOS lessons to subject questions.
           </p>
           <Button onClick={downloadTemplate} variant="outline">
             <Download className="h-4 w-4 mr-2" />
@@ -1465,7 +1454,7 @@ export default function BulkImport({
             <p className="text-sm text-muted-foreground mb-4">
               Select the <strong>Category</strong>, <strong>Specialization</strong>, and <strong>Subject</strong> these
               questions belong to. All imported questions will inherit this exact academic context — guaranteeing they
-              show up correctly in the Question Bank filters. The AI will only classify <strong>Topic</strong>, <strong>Bloom's Level</strong>, <strong>Difficulty</strong>, and <strong>Question Type</strong> within this fixed context.
+              show up correctly in the Question Bank filters. The AI will only classify <strong>Bloom's Level</strong>, <strong>Difficulty</strong>, and <strong>Question Type</strong> within this fixed context. Topic alignment is deferred to Test Questionnaire generation, where TOS topics are matched to subject questions via semantic similarity.
             </p>
             <div className="grid gap-4 sm:grid-cols-3">
               <div className="space-y-2">
@@ -1585,7 +1574,7 @@ export default function BulkImport({
               <Badge variant="secondary">Subject: {verificationData[0]?.subject_code} — {verificationData[0]?.subject_description}</Badge>
             </div>
             <p className="text-sm text-muted-foreground mb-4">
-              All questions inherit the locked academic context above. Review the AI-classified <strong>Topic</strong>, <strong>Bloom's Level</strong>, <strong>Difficulty</strong>, and <strong>Question Type</strong> below before saving.
+              All questions inherit the locked academic context above. Review the AI-classified <strong>Bloom's Level</strong>, <strong>Difficulty</strong>, and <strong>Question Type</strong> below before saving. <em>Topic alignment is performed automatically during Test Questionnaire generation.</em>
             </p>
             <div className="overflow-x-auto border rounded-lg">
               <table className="w-full text-sm">
@@ -1593,7 +1582,6 @@ export default function BulkImport({
                   <tr className="border-b bg-muted/50">
                     <th className="text-left p-2 font-medium w-8">#</th>
                     <th className="text-left p-2 font-medium min-w-[260px]">Question</th>
-                    <th className="text-left p-2 font-medium">Topic</th>
                     <th className="text-left p-2 font-medium">Bloom</th>
                     <th className="text-left p-2 font-medium">Difficulty</th>
                     <th className="text-left p-2 font-medium">Type</th>
@@ -1604,7 +1592,6 @@ export default function BulkImport({
                     <tr key={idx} className="border-b hover:bg-muted/30">
                       <td className="p-2 text-muted-foreground">{idx + 1}</td>
                       <td className="p-2 max-w-[320px] truncate" title={q.question_text}>{q.question_text}</td>
-                      <td className="p-2">{q.topic && q.topic.trim() ? q.topic : <span className="italic text-muted-foreground">Needs review</span>}</td>
                       <td className="p-2 capitalize">{q.bloom_level}</td>
                       <td className="p-2 capitalize">{q.difficulty}</td>
                       <td className="p-2 uppercase text-xs">{q.question_type}</td>

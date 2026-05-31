@@ -141,6 +141,7 @@ export const TOSMatrix = ({ data }: TOSMatrixProps) => {
         <div><span>Year and Section: </span><span class="value">${data.year_section || '_______________'}</span></div>
         <div><span>Description: </span><span class="value">${data.description || '_______________'}</span></div>
         <div><span>Course: </span><span class="value">${data.course || '_______________'}</span></div>
+        <div><span>School Year / Semester: </span><span class="value">${[data.school_year, data.semester].filter(Boolean).join(' – ') || '_______________'}</span></div>
       </div>
       <table>
         <thead>
@@ -219,20 +220,20 @@ export const TOSMatrix = ({ data }: TOSMatrixProps) => {
 
   // Shared inline styles for the printable content
   const printStyles = `
-    @page { size: letter landscape; margin: 0.5in 0.6in; }
+    @page { size: A4 landscape; margin: 8mm 10mm; }
     * { margin: 0; padding: 0; box-sizing: border-box; }
-    body { font-family: "Times New Roman", Times, serif; font-size: 11pt; color: #000; background: #fff; line-height: 1.4; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
+    html, body { font-family: "Times New Roman", Times, serif; font-size: 9.5pt; color: #000; background: #fff; line-height: 1.2; -webkit-print-color-adjust: exact; print-color-adjust: exact; }
     img { max-width: 100%; }
-    .tos-header { text-align: center; font-weight: bold; font-size: 14pt; border: 2px solid #000; padding: 6px 0; margin-bottom: 14px; margin-top: 8px; text-transform: uppercase; letter-spacing: 1px; }
-    .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 2px 40px; margin-bottom: 14px; font-size: 11pt; }
+    .tos-header { text-align: center; font-weight: bold; font-size: 12pt; border: 1.5px solid #000; padding: 3px 0; margin: 4px 0 6px; text-transform: uppercase; letter-spacing: 1px; }
+    .meta-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 1px 30px; margin-bottom: 6px; font-size: 9pt; }
     .meta-grid .value { text-decoration: underline; margin-left: 4px; }
-    table { border-collapse: collapse; width: 100%; table-layout: auto; margin-top: 8px; }
-    th, td { border: 1.5px solid #000; padding: 4px 6px; text-align: center; vertical-align: middle; font-size: 9.5pt; }
+    table { border-collapse: collapse; width: 100%; table-layout: auto; margin-top: 4px; page-break-inside: avoid; }
+    th, td { border: 1px solid #000; padding: 2px 4px; text-align: center; vertical-align: middle; font-size: 8.5pt; }
     th { background-color: #91E291 !important; font-weight: bold; }
-    .item-nums { font-size: 7.5pt; display: block; color: #333; }
-    .sig-section { display: flex; justify-content: space-between; margin-top: 30px; font-size: 10pt; }
+    .item-nums { font-size: 7pt; display: block; color: #333; }
+    .sig-section { display: flex; justify-content: space-between; margin-top: 14px; font-size: 9pt; page-break-inside: avoid; }
     .sig-block { text-align: center; width: 30%; }
-    .sig-title { font-size: 9pt; }
+    .sig-title { font-size: 8.5pt; }
     .total-row td { font-weight: bold; background-color: #f5f5f5 !important; }
     @media print { body { margin: 0; padding: 0; } }
   `;
@@ -256,27 +257,50 @@ export const TOSMatrix = ({ data }: TOSMatrixProps) => {
     if (!printRef.current) return;
     setExporting(true);
 
+    // Temporarily compact the printable element for export-only sizing
+    const el = printRef.current;
+    const prevPadding = el.style.padding;
+    const prevWidth = el.style.width;
+    el.style.padding = '8px';
+    // A4 landscape ~ 1123px wide at 96dpi minus margins; render at this width to maximize fit
+    el.style.width = '1100px';
+
     try {
-      const canvas = await html2canvas(printRef.current, {
-        scale: 2.5,
+      // Allow layout to settle
+      await new Promise(r => requestAnimationFrame(() => r(null)));
+
+      const canvas = await html2canvas(el, {
+        scale: 2,
         useCORS: true,
         backgroundColor: '#ffffff',
-        width: printRef.current.scrollWidth,
-        height: printRef.current.scrollHeight,
+        width: el.scrollWidth,
+        height: el.scrollHeight,
+        windowWidth: el.scrollWidth,
       });
 
       const pdf = new jsPDF('landscape', 'mm', 'a4');
-      const pdfW = pdf.internal.pageSize.getWidth();
-      const pdfH = pdf.internal.pageSize.getHeight();
-      const mx = 12, my = 10;
+      const pdfW = pdf.internal.pageSize.getWidth();   // 297
+      const pdfH = pdf.internal.pageSize.getHeight();  // 210
+      const mx = 8, my = 8;
       const usableW = pdfW - mx * 2;
       const usableH = pdfH - my * 2;
-      const imgH = (canvas.height * usableW) / canvas.width;
 
-      if (imgH <= usableH) {
-        pdf.addImage(canvas.toDataURL('image/png', 0.95), 'PNG', mx, my, usableW, imgH);
+      const widthScaledH = (canvas.height * usableW) / canvas.width;
+      const imgData = canvas.toDataURL('image/png');
+
+      // Single-page fit: if content fits, OR overflow is modest (<=25%), uniformly scale to one page
+      const overflowRatio = widthScaledH / usableH;
+      if (overflowRatio <= 1.25) {
+        // Fit entirely on one page (preserve aspect ratio)
+        const fit = Math.min(1, usableH / widthScaledH);
+        const renderW = usableW * fit;
+        const renderH = widthScaledH * fit;
+        const offsetX = mx + (usableW - renderW) / 2;
+        const offsetY = my + (usableH - renderH) / 2;
+        pdf.addImage(imgData, 'PNG', offsetX, offsetY, renderW, renderH);
       } else {
-        let remaining = imgH, srcY = 0;
+        // Fallback: paginate by slicing source canvas
+        let remaining = widthScaledH, srcY = 0;
         const ratio = canvas.width / usableW;
         while (remaining > 0) {
           if (srcY > 0) pdf.addPage();
@@ -287,8 +311,10 @@ export const TOSMatrix = ({ data }: TOSMatrixProps) => {
           sc.height = srcSliceH;
           const ctx = sc.getContext('2d');
           if (ctx) {
+            ctx.fillStyle = '#ffffff';
+            ctx.fillRect(0, 0, sc.width, sc.height);
             ctx.drawImage(canvas, 0, srcY, canvas.width, srcSliceH, 0, 0, canvas.width, srcSliceH);
-            pdf.addImage(sc.toDataURL('image/png', 0.95), 'PNG', mx, my, usableW, sliceH);
+            pdf.addImage(sc.toDataURL('image/png'), 'PNG', mx, my, usableW, sliceH);
           }
           srcY += srcSliceH;
           remaining -= usableH;
@@ -302,6 +328,8 @@ export const TOSMatrix = ({ data }: TOSMatrixProps) => {
       console.error('PDF export error:', err);
       toast.error("Failed to export PDF");
     } finally {
+      el.style.padding = prevPadding;
+      el.style.width = prevWidth;
       setExporting(false);
     }
   }, [data]);
@@ -363,6 +391,7 @@ export const TOSMatrix = ({ data }: TOSMatrixProps) => {
           <div><span>Year and Section: </span><span style={{ textDecoration: 'underline' }}>{data.year_section || '_______________'}</span></div>
           <div><span>Description: </span><span style={{ textDecoration: 'underline' }}>{data.description || '_______________'}</span></div>
           <div><span>Course: </span><span style={{ textDecoration: 'underline' }}>{data.course || '_______________'}</span></div>
+          <div><span>School Year / Semester: </span><span style={{ textDecoration: 'underline' }}>{[data.school_year, data.semester].filter(Boolean).join(' – ') || '_______________'}</span></div>
         </div>
 
         {/* TOS Table */}

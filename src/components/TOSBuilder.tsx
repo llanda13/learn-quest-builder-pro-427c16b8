@@ -7,11 +7,13 @@ import { Button } from "@/components/ui/button";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Plus, Trash2, Calculator, Brain, Target, AlertTriangle, Upload } from "lucide-react";
 import { TOSUploadParser } from "./tos/TOSUploadParser";
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
+import { SEMESTER_OPTIONS } from "@/constants/semesters";
 import { TOSMatrix } from "./TOSMatrix";
 import { TOS } from "@/services/db/tos";
 import { Analytics } from "@/services/db/analytics";
@@ -52,6 +54,7 @@ const tosSchema = z.object({
   year_section: z.string().min(1, "Year & section is required"),
   exam_period: z.string().min(1, "Exam period is required"),
   school_year: z.string().min(1, "School year is required"),
+  semester: z.string().min(1, "Semester is required"),
   total_items: z.number().min(10, "Minimum 10 items required").max(100, "Maximum 100 items allowed"),
   prepared_by: z.string().optional(),
   checked_by: z.string().optional(),
@@ -131,6 +134,7 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
       year_section: persistedDefaults?.year_section ?? "",
       exam_period: persistedDefaults?.exam_period ?? "",
       school_year: persistedDefaults?.school_year ?? "",
+      semester: persistedDefaults?.semester ?? "",
       total_items: persistedDefaults?.total_items ?? 50,
       prepared_by: persistedDefaults?.prepared_by ?? "",
       checked_by: persistedDefaults?.checked_by ?? "",
@@ -207,6 +211,7 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
         year_section: template.year_section || "",
         exam_period: template.exam_period || "",
         school_year: template.school_year || "",
+        semester: template.semester || "",
         total_items: template.total_items || 50,
         prepared_by: template.prepared_by || "",
         checked_by: template.checked_by || "",
@@ -279,6 +284,7 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
         year_section: data.year_section,
         exam_period: data.exam_period,
         school_year: data.school_year,
+        semester: data.semester,
         total_items: data.total_items,
         prepared_by: data.prepared_by || "",
         checked_by: data.checked_by || "",
@@ -342,6 +348,7 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
         year_section: tosMatrix.year_section,
         exam_period: tosMatrix.exam_period,
         school_year: tosMatrix.school_year,
+        semester: tosMatrix.semester,
         total_items: tosMatrix.total_items,
         prepared_by: tosMatrix.prepared_by,
         checked_by: tosMatrix.checked_by,
@@ -409,6 +416,7 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
           year_section: tosMatrix.year_section,
           exam_period: tosMatrix.exam_period,
           school_year: tosMatrix.school_year,
+          semester: tosMatrix.semester,
           total_items: tosMatrix.total_items,
         prepared_by: tosMatrix.prepared_by,
         checked_by: tosMatrix.checked_by,
@@ -481,6 +489,7 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
         year_section: tosMatrix.year_section,
         exam_period: tosMatrix.exam_period,
         school_year: tosMatrix.school_year,
+        semester: tosMatrix.semester,
         tos_id: savedTOSId,
       };
 
@@ -606,7 +615,7 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
                     </>
                   ) : (
                     <>
-                      🧠 Generate Multi-Section Test
+                      🧠 Generate Test Questionnaire
                     </>
                   )}
                 </Button>
@@ -637,6 +646,7 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
               year_section: data.year_section || "",
               exam_period: data.exam_period || "",
               school_year: data.school_year || "",
+              semester: data.semester || "",
               total_items: data.total_items || 50,
               prepared_by: data.prepared_by || "",
               checked_by: data.checked_by || "",
@@ -654,6 +664,7 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
             if (!formData.year_section) missingFields.push("Year & Section");
             if (!formData.exam_period) missingFields.push("Exam Period");
             if (!formData.school_year) missingFields.push("School Year");
+            if (!formData.semester) missingFields.push("Semester");
             
             const hasValidTopics = parsedTopics.some(t => t.topic && t.hours > 0);
             if (!hasValidTopics) missingFields.push("Topics with hours");
@@ -745,6 +756,27 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
                   <p className="text-sm text-destructive mt-1">{errors.school_year.message}</p>
                 )}
               </div>
+
+              <div>
+                <Label htmlFor="semester">Semester</Label>
+                <Select
+                  value={watch("semester") || ""}
+                  onValueChange={(v) => setValue("semester", v, { shouldValidate: true, shouldDirty: true })}
+                >
+                  <SelectTrigger id="semester">
+                    <SelectValue placeholder="Select semester" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    {SEMESTER_OPTIONS.map((s) => (
+                      <SelectItem key={s} value={s}>{s}</SelectItem>
+                    ))}
+                  </SelectContent>
+                </Select>
+                {errors.semester && (
+                  <p className="text-sm text-destructive mt-1">{errors.semester.message}</p>
+                )}
+              </div>
+
 
               <div>
                 <Label htmlFor="totalItems">Total Items</Label>
@@ -874,7 +906,7 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
 
             <Button type="submit" className="w-full" variant="academic">
               <Calculator className="h-4 w-4 mr-2" />
-              Generate TOS Matrix
+              Submit
             </Button>
           </form>
         </CardContent>
