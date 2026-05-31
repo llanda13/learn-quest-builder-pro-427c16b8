@@ -3,7 +3,7 @@ import { supabase } from '@/integrations/supabase/client';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Button } from '@/components/ui/button';
 import { Badge } from '@/components/ui/badge';
-import { FileText, Calendar, Eye, GraduationCap, BookOpen, Building2 } from 'lucide-react';
+import { FileText, Calendar, Eye, GraduationCap, BookOpen, Building2, CalendarRange } from 'lucide-react';
 import { useNavigate } from 'react-router-dom';
 import { useToast } from '@/hooks/use-toast';
 
@@ -14,6 +14,7 @@ interface GeneratedTest {
   course: string | null;
   exam_period: string | null;
   school_year: string | null;
+  semester: string | null;
   points_per_question: number | null;
   created_at: string;
   items: any;
@@ -38,7 +39,7 @@ export default function MyTests() {
       const [testsRes, profileRes] = await Promise.all([
         supabase
           .from('generated_tests')
-          .select('id, title, subject, course, exam_period, school_year, points_per_question, created_at, items')
+          .select('id, title, subject, course, exam_period, school_year, semester, points_per_question, created_at, items')
           .eq('created_by', user.id)
           .order('created_at', { ascending: false }),
         supabase
@@ -58,6 +59,7 @@ export default function MyTests() {
         course: test.course,
         exam_period: test.exam_period,
         school_year: test.school_year,
+        semester: (test as any).semester ?? null,
         points_per_question: test.points_per_question,
         created_at: test.created_at || '',
         items: test.items
@@ -137,6 +139,15 @@ export default function MyTests() {
                     <span>
                       <span className="font-semibold text-foreground">Exam:</span>{' '}
                       <span className="text-muted-foreground">{test.exam_period || 'Not set'}</span>
+                    </span>
+                  </div>
+                  <div className="flex items-start gap-2">
+                    <CalendarRange className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
+                    <span>
+                      <span className="font-semibold text-foreground">School Year / Semester:</span>{' '}
+                      <span className="text-muted-foreground">
+                        {[test.school_year, test.semester].filter(Boolean).join(' – ') || 'Not set'}
+                      </span>
                     </span>
                   </div>
                   <div className="flex items-start gap-2">

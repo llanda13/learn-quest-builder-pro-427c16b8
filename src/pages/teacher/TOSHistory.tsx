@@ -28,6 +28,7 @@ interface TOSEntry {
   year_section: string | null;
   exam_period: string | null;
   school_year: string | null;
+  semester?: string | null;
   total_items: number | null;
   prepared_by?: string | null;
   noted_by?: string | null;
@@ -90,7 +91,8 @@ export default function TOSHistory() {
           // Don't copy exam-specific data so teacher can set new values
           year_section: '',
           exam_period: '',
-          school_year: ''
+          school_year: '',
+          semester: ''
         },
         isReusing: true
       }
@@ -108,7 +110,8 @@ export default function TOSHistory() {
       (tos.course?.toLowerCase().includes(searchLower)) ||
       (tos.subject_no?.toLowerCase().includes(searchLower)) ||
       (tos.description?.toLowerCase().includes(searchLower)) ||
-      (tos.exam_period?.toLowerCase().includes(searchLower))
+      (tos.exam_period?.toLowerCase().includes(searchLower)) ||
+      (tos.semester?.toLowerCase().includes(searchLower))
     );
   });
 
@@ -195,7 +198,7 @@ export default function TOSHistory() {
       <div className="relative">
         <Search className="absolute left-3 top-1/2 -translate-y-1/2 h-4 w-4 text-muted-foreground" />
         <Input
-          placeholder="Search by course, subject, or exam period..."
+          placeholder="Search by course, subject, exam period, or semester..."
           value={searchQuery}
           onChange={(e) => setSearchQuery(e.target.value)}
           className="pl-10"
@@ -247,6 +250,11 @@ export default function TOSHistory() {
                           {tos.exam_period && (
                             <Badge variant="secondary" className="text-xs">
                               {tos.exam_period}
+                            </Badge>
+                          )}
+                          {tos.semester && (
+                            <Badge variant="secondary" className="text-xs">
+                              {tos.semester}
                             </Badge>
                           )}
                         </div>

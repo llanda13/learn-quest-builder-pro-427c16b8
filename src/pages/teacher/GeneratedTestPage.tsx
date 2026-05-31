@@ -16,6 +16,7 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { supabase } from "@/integrations/supabase/client";
+import { SEMESTER_OPTIONS } from "@/constants/semesters";
 
 interface TestItem {
   question_text?: string;
@@ -89,7 +90,7 @@ export default function GeneratedTestPage() {
   const [loading, setLoading] = useState(true);
   const [showAnswerKey, setShowAnswerKey] = useState(false);
   const [editOpen, setEditOpen] = useState(false);
-  const [editForm, setEditForm] = useState({ college: '', examType: '', subjectCode: '', subjectDescription: '', schoolYear: '' });
+  const [editForm, setEditForm] = useState({ college: '', examType: '', subjectCode: '', subjectDescription: '', schoolYear: '', semester: '' });
   const [saving, setSaving] = useState(false);
   const [college, setCollege] = useState<string | null>(null);
   const { checkAndRepair, isRepairing } = useTestAutoRepair(testId);
@@ -165,6 +166,7 @@ export default function GeneratedTestPage() {
       subjectCode: test?.course || '',
       subjectDescription: test?.subject || '',
       schoolYear: test?.school_year || '',
+      semester: test?.semester || '',
     });
     setEditOpen(true);
   };
@@ -181,6 +183,7 @@ export default function GeneratedTestPage() {
         subject: editForm.subjectDescription,
         exam_period: editForm.examType,
         school_year: editForm.schoolYear,
+        semester: editForm.semester,
         title: newTitle,
       });
 
@@ -197,6 +200,7 @@ export default function GeneratedTestPage() {
         subject: editForm.subjectDescription,
         exam_period: editForm.examType,
         school_year: editForm.schoolYear,
+        semester: editForm.semester,
         title: newTitle,
       }));
 
@@ -311,6 +315,7 @@ export default function GeneratedTestPage() {
               {test.subject && <Badge variant="secondary">{test.subject}</Badge>}
               {test.exam_period && <Badge variant="secondary">{test.exam_period}</Badge>}
               {test.school_year && <Badge variant="secondary">SY {test.school_year}</Badge>}
+              {test.semester && <Badge variant="secondary">{test.semester}</Badge>}
             </div>
             {college && (
               <p className="text-sm text-muted-foreground">College: {college}</p>
@@ -399,6 +404,19 @@ export default function GeneratedTestPage() {
                 onChange={(e) => setEditForm(f => ({ ...f, schoolYear: e.target.value }))}
                 placeholder="e.g. 2024-2025"
               />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="edit-semester">Semester</Label>
+              <Select value={editForm.semester} onValueChange={(v) => setEditForm(f => ({ ...f, semester: v }))}>
+                <SelectTrigger id="edit-semester">
+                  <SelectValue placeholder="Select semester" />
+                </SelectTrigger>
+                <SelectContent>
+                  {SEMESTER_OPTIONS.map(s => (
+                    <SelectItem key={s} value={s}>{s}</SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
             </div>
             <div className="text-sm text-muted-foreground">
               <span className="font-medium">Date Generated:</span> {new Date(test.created_at).toLocaleDateString('en-US', { year: 'numeric', month: 'long', day: 'numeric' })}
