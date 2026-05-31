@@ -146,16 +146,73 @@ interface Slot {
   filled: boolean;
   question?: any;
   source?: 'bank' | 'ai';
+  // Matrix-Driven Selection: every slot is an explicit (Topic × Cognitive Level)
+  // coordinate. The engine queries/generates to satisfy BOTH constraints
+  // simultaneously instead of looping linearly from 1..N.
+  coordinate: { topic: string; cognitive_level: string; index: number };
 }
 
 /**
- * Registry for tracking used concepts/operations across entire session
+ * Registry for tracking used concepts/operations across entire session.
+ *
+ * `compiledItemStems` is the runtime Zero-Redundancy Filter blacklist:
+ * every accepted question's normalized stem is appended and every new
+ * candidate must pass a literal + semantic-similarity check against it
+ * before being written to the final questionnaire.
  */
 interface GenerationRegistry {
   usedConcepts: Record<string, string[]>;
   usedOperations: Record<string, string[]>;
   usedPairs: string[];
   usedQuestionTexts: string[];
+  compiledItemStems: string[];
+}
+
+// Higher-order Bloom levels require a situational case / scenario / dataset cue
+// in the stem (Taxonomy-Based Stem Conditioning).
+const HIGHER_ORDER_BLOOM = new Set(['applying', 'analyzing', 'evaluating', 'creating']);
+const SCENARIO_CUE_PATTERNS: RegExp[] = [
+  /\bgiven\b/i, /\bscenario\b/i, /\bsuppose\b/i, /\bconsider\s+(a|the|an)\b/i,
+  /\bcase\s+study\b/i, /\busing\s+the\s+(following|dataset|data|code|figure|table)/i,
+  /\bif\s+a\b/i, /\bwhen\s+a\b/i, /\bin\s+a\s+(situation|project|company|team|system|class|lab)/i,
+  /\b(dataset|sample|excerpt|snippet|diagram|figure|table|chart|log)\b/i,
+  /\bthe\s+following\b/i, /\bbased\s+on\s+the\b/i, /\bdesign\s+a\b/i, /\bdevelop\s+a\b/i,
+  /\bplan\s+a\b/i, /\bcompare\s+\w+\s+and\s+\w+/i, /\bevaluate\s+the\b/i
+];
+function hasScenarioCue(text: string): boolean {
+  return SCENARIO_CUE_PATTERNS.some(p => p.test(text));
+}
+
+// Literal-stem normalization for the deduplication blacklist.
+function normalizeStemForDedup(text: string): string {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Strict session-blacklist check used during AI per-slot acceptance.
+// Returns the offending prior stem when a duplicate (literal or semantic) is found.
+function findDuplicateInBlacklist(
+  candidateText: string,
+  blacklist: string[],
+  semanticThreshold = 0.72
+): { hit: true; offender: string; similarity: number } | { hit: false } {
+  const norm = normalizeStemForDedup(candidateText);
+  if (!norm) return { hit: false };
+  for (const prior of blacklist) {
+    const priorNorm = normalizeStemForDedup(prior);
+    if (!priorNorm) continue;
+    if (priorNorm === norm) {
+      return { hit: true, offender: prior, similarity: 1 };
+    }
+    const sim = calculateTextSimilarity(norm, priorNorm);
+    if (sim >= semanticThreshold) {
+      return { hit: true, offender: prior, similarity: sim };
+    }
+  }
+  return { hit: false };
 }
 
 // ============= CONSTANTS =============
@@ -477,7 +534,8 @@ function expandTOSToSlots(distributions: TopicDistribution[], totalItems: number
             knowledgeDimension,
             questionType,
             points,
-            filled: false
+            filled: false,
+            coordinate: { topic, cognitive_level: bloom, index: slotId - 1 }
           });
         }
       }
@@ -527,7 +585,8 @@ function expandTOSToSlots(distributions: TopicDistribution[], totalItems: number
       knowledgeDimension: 'conceptual',
       questionType: 'mcq',
       points: POINTS.mcq,
-      filled: false
+      filled: false,
+      coordinate: { topic: dist.topic, cognitive_level: 'understanding', index: slotId - 1 }
     });
   }
   // If rounding created more slots than totalItems, trim
@@ -614,7 +673,9 @@ async function fillSlotsFromBank(
         if (idx > -1) availableQuestions.splice(idx, 1);
         
         registerQuestion(registry, slot.topic, slot.bloomLevel, selectedQuestion);
-        
+
+        selectedQuestion.matrix_coordinate = slot.coordinate;
+        selectedQuestion.metadata = { ...(selectedQuestion.metadata || {}), matrix_coordinate: slot.coordinate };
         slot.filled = true;
         slot.question = selectedQuestion;
         slot.source = 'bank';
@@ -668,6 +729,9 @@ function registerQuestion(
 ): void {
   const text = question.question_text?.toLowerCase() || '';
   registry.usedQuestionTexts.push(text);
+  // Zero-Redundancy Filter: every accepted stem is added to the compiled-item
+  // blacklist used by subsequent per-slot validation.
+  if (text) registry.compiledItemStems.push(text);
   
   const concept = question.targeted_concept || extractConcept(text);
   if (concept) {
@@ -945,7 +1009,7 @@ async function fillSlotsWithAI(
         const slot = batch[i];
         let candidate = batchQuestions[i];
         let rejection = candidate
-          ? getQuestionRejectionReason(candidate, slot, subjectCtx)
+          ? getQuestionRejectionReason(candidate, slot, subjectCtx, registry)
           : (batchError
               ? `Batch error: ${batchError instanceof Error ? batchError.message : String(batchError)}`
               : 'No question returned');
@@ -953,7 +1017,7 @@ async function fillSlotsWithAI(
         let perSlotAttempt = 0;
         while (rejection && perSlotAttempt < MAX_PER_SLOT_RETRIES) {
           perSlotAttempt++;
-          console.warn(`   🔁 Slot ${slot.id} rejected (${rejection}) — regenerating ${perSlotAttempt}/${MAX_PER_SLOT_RETRIES}`);
+          console.warn(`   🔁 Slot ${slot.id} rejected (${rejection}) — regenerating ${perSlotAttempt}/${MAX_PER_SLOT_RETRIES} [coord=${slot.coordinate?.topic}×${slot.coordinate?.cognitive_level}]`);
           try {
             // Force a checkpoint on every retry so the persona is re-anchored
             const single = await generateQuestionsWithIntents(
@@ -961,7 +1025,7 @@ async function fillSlotsWithAI(
               { current: globalItemPosition + i, total: totalSlots, checkpoint: true }
             );
             candidate = single[0];
-            rejection = candidate ? getQuestionRejectionReason(candidate, slot, subjectCtx) : 'Empty regeneration';
+            rejection = candidate ? getQuestionRejectionReason(candidate, slot, subjectCtx, registry) : 'Empty regeneration';
           } catch (err) {
             rejection = `Regeneration error: ${err instanceof Error ? err.message : String(err)}`;
           }
@@ -975,6 +1039,8 @@ async function fillSlotsWithAI(
         }
 
         candidate.slot_id = slot.id;
+        candidate.matrix_coordinate = slot.coordinate;
+        candidate.metadata = { ...(candidate.metadata || {}), matrix_coordinate: slot.coordinate };
         registerQuestion(registry, slot.topic, slot.bloomLevel, candidate);
         slot.filled = true;
         slot.question = candidate;
@@ -1018,7 +1084,8 @@ function isGenericTemplate(text: string): boolean {
 function getQuestionRejectionReason(
   question: any,
   slot: Slot,
-  subjectCtx?: SubjectContext
+  subjectCtx?: SubjectContext,
+  registry?: GenerationRegistry
 ): string | null {
   if (!question) return 'Empty AI response for slot';
   const questionText = String(question.question_text || question.text || '').trim();
@@ -1028,6 +1095,27 @@ function getQuestionRejectionReason(
   const topicKeywords = getTopicKeywords(slot.topic);
   if (topicKeywords.length > 0 && !topicKeywords.some(keyword => lowerText.includes(keyword))) {
     return `Missing topic keyword for "${slot.topic}"`;
+  }
+
+  // Taxonomy-Based Stem Conditioning: higher-order Bloom levels MUST present a
+  // situational case, technical scenario, or analytical-constraint problem.
+  // Essays already require extended response, so skip the cue check for them.
+  if (
+    slot.questionType !== 'essay' &&
+    HIGHER_ORDER_BLOOM.has(String(slot.bloomLevel).toLowerCase()) &&
+    !hasScenarioCue(questionText)
+  ) {
+    return `Higher-order Bloom (${slot.bloomLevel}) requires a scenario/case/dataset cue in the stem`;
+  }
+
+  // Zero-Redundancy Filter: literal + semantic match against the session
+  // compiled-item blacklist. Any hit forces a fresh generation session for
+  // this coordinate.
+  if (registry && registry.compiledItemStems.length > 0) {
+    const dup = findDuplicateInBlacklist(questionText, registry.compiledItemStems, 0.72);
+    if (dup.hit) {
+      return `Duplicate/similar stem already in session blacklist (sim=${dup.similarity.toFixed(2)})`;
+    }
   }
 
   // For TECHNICAL subjects, also enforce technical-vocabulary presence and reject
@@ -1416,8 +1504,12 @@ Question ${idx + 1}:
   };
   
   const subjectAnchor = subjectCtx ? renderSubjectAnchor(subjectCtx) + '\n\n' : '';
+  const isHigherOrder = HIGHER_ORDER_BLOOM.has(bloom.toLowerCase());
+  const scenarioDirective = isHigherOrder
+    ? `\n\n🎯 MANDATORY STEM CONDITIONING (${bloom}): Every stem MUST open with a situational case, technical scenario, dataset/code excerpt, or analytical constraint problem (e.g., "Given the following…", "In a scenario where…", "Consider a system that…", "Based on the dataset below…"). Stems without a scenario cue will be REJECTED and regenerated.\n`
+    : '';
 
-  const prompt = `${subjectAnchor}Generate ${intents.length} PROFESSIONAL Multiple Choice Questions for an academic examination.
+  const prompt = `${subjectAnchor}${scenarioDirective}Generate ${intents.length} PROFESSIONAL Multiple Choice Questions for an academic examination.
 
 🚨 ABSOLUTE REQUIREMENT: REAL CONTENT ONLY - NO PLACEHOLDERS 🚨
 
@@ -2075,7 +2167,8 @@ serve(async (req) => {
       usedConcepts: {},
       usedOperations: {},
       usedPairs: [],
-      usedQuestionTexts: []
+      usedQuestionTexts: [],
+      compiledItemStems: []
     };
 
     // STEP 1: Expand TOS into slots with question types
@@ -2274,16 +2367,21 @@ serve(async (req) => {
       // If we can't identify unfilled slots, create generic MCQ slots for the shortfall
       const slotsToFill = unfilledSlots.length > 0 
         ? unfilledSlots.slice(0, shortfall)
-        : Array.from({ length: shortfall }, (_, i) => ({
-            id: `repair_slot_${completionAttempts}_${i}`,
-            topic: body.distributions[0]?.topic || 'General',
-            bloomLevel: ['remembering', 'understanding', 'applying'][i % 3],
-            difficulty: ['easy', 'average', 'difficult'][i % 3],
-            knowledgeDimension: 'conceptual',
-            questionType: 'mcq' as const,
-            points: 1,
-            filled: false
-          }));
+        : Array.from({ length: shortfall }, (_, i) => {
+            const topic = body.distributions[0]?.topic || 'General';
+            const bloom = ['remembering', 'understanding', 'applying'][i % 3];
+            return {
+              id: `repair_slot_${completionAttempts}_${i}`,
+              topic,
+              bloomLevel: bloom,
+              difficulty: ['easy', 'average', 'difficult'][i % 3],
+              knowledgeDimension: 'conceptual',
+              questionType: 'mcq' as const,
+              points: 1,
+              filled: false,
+              coordinate: { topic, cognitive_level: bloom, index: -1 }
+            };
+          });
       
       console.log(`   🎯 Generating ${slotsToFill.length} repair questions...`);
       
@@ -2379,15 +2477,17 @@ serve(async (req) => {
       const filledSlotIds = new Set(normalizedQuestions.map(q => q.slot_id || q.metadata?.slot_id).filter(Boolean));
       const remainingSlots = allSlots.filter(slot => !filledSlotIds.has(slot.id));
       for (let i = 0; i < finalShortfall; i++) {
+        const fallbackTopic = body.distributions[0]?.topic || 'General Topic';
         const slot = remainingSlots[i] || allSlots[(normalizedQuestions.length + i) % allSlots.length] || {
           id: `final_fallback_${i}`,
-          topic: body.distributions[0]?.topic || 'General Topic',
+          topic: fallbackTopic,
           bloomLevel: 'understanding',
           difficulty: 'average',
           knowledgeDimension: 'conceptual',
           questionType: 'mcq' as const,
           points: 1,
-          filled: false
+          filled: false,
+          coordinate: { topic: fallbackTopic, cognitive_level: 'understanding', index: -1 }
         };
         normalizedQuestions.push(createFallbackQuestion(slot, 'Final completion fallback after retries', i));
       }
