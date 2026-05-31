@@ -585,7 +585,8 @@ function expandTOSToSlots(distributions: TopicDistribution[], totalItems: number
       knowledgeDimension: 'conceptual',
       questionType: 'mcq',
       points: POINTS.mcq,
-      filled: false
+      filled: false,
+      coordinate: { topic: dist.topic, cognitive_level: 'understanding', index: slotId - 1 }
     });
   }
   // If rounding created more slots than totalItems, trim
