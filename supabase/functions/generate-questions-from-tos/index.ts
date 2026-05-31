@@ -1007,7 +1007,7 @@ async function fillSlotsWithAI(
         const slot = batch[i];
         let candidate = batchQuestions[i];
         let rejection = candidate
-          ? getQuestionRejectionReason(candidate, slot, subjectCtx)
+          ? getQuestionRejectionReason(candidate, slot, subjectCtx, registry)
           : (batchError
               ? `Batch error: ${batchError instanceof Error ? batchError.message : String(batchError)}`
               : 'No question returned');
@@ -1015,7 +1015,7 @@ async function fillSlotsWithAI(
         let perSlotAttempt = 0;
         while (rejection && perSlotAttempt < MAX_PER_SLOT_RETRIES) {
           perSlotAttempt++;
-          console.warn(`   🔁 Slot ${slot.id} rejected (${rejection}) — regenerating ${perSlotAttempt}/${MAX_PER_SLOT_RETRIES}`);
+          console.warn(`   🔁 Slot ${slot.id} rejected (${rejection}) — regenerating ${perSlotAttempt}/${MAX_PER_SLOT_RETRIES} [coord=${slot.coordinate?.topic}×${slot.coordinate?.cognitive_level}]`);
           try {
             // Force a checkpoint on every retry so the persona is re-anchored
             const single = await generateQuestionsWithIntents(
@@ -1023,7 +1023,7 @@ async function fillSlotsWithAI(
               { current: globalItemPosition + i, total: totalSlots, checkpoint: true }
             );
             candidate = single[0];
-            rejection = candidate ? getQuestionRejectionReason(candidate, slot, subjectCtx) : 'Empty regeneration';
+            rejection = candidate ? getQuestionRejectionReason(candidate, slot, subjectCtx, registry) : 'Empty regeneration';
           } catch (err) {
             rejection = `Regeneration error: ${err instanceof Error ? err.message : String(err)}`;
           }
@@ -1037,6 +1037,8 @@ async function fillSlotsWithAI(
         }
 
         candidate.slot_id = slot.id;
+        candidate.matrix_coordinate = slot.coordinate;
+        candidate.metadata = { ...(candidate.metadata || {}), matrix_coordinate: slot.coordinate };
         registerQuestion(registry, slot.topic, slot.bloomLevel, candidate);
         slot.filled = true;
         slot.question = candidate;
