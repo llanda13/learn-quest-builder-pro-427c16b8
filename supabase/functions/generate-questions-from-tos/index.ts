@@ -146,16 +146,73 @@ interface Slot {
   filled: boolean;
   question?: any;
   source?: 'bank' | 'ai';
+  // Matrix-Driven Selection: every slot is an explicit (Topic × Cognitive Level)
+  // coordinate. The engine queries/generates to satisfy BOTH constraints
+  // simultaneously instead of looping linearly from 1..N.
+  coordinate: { topic: string; cognitive_level: string; index: number };
 }
 
 /**
- * Registry for tracking used concepts/operations across entire session
+ * Registry for tracking used concepts/operations across entire session.
+ *
+ * `compiledItemStems` is the runtime Zero-Redundancy Filter blacklist:
+ * every accepted question's normalized stem is appended and every new
+ * candidate must pass a literal + semantic-similarity check against it
+ * before being written to the final questionnaire.
  */
 interface GenerationRegistry {
   usedConcepts: Record<string, string[]>;
   usedOperations: Record<string, string[]>;
   usedPairs: string[];
   usedQuestionTexts: string[];
+  compiledItemStems: string[];
+}
+
+// Higher-order Bloom levels require a situational case / scenario / dataset cue
+// in the stem (Taxonomy-Based Stem Conditioning).
+const HIGHER_ORDER_BLOOM = new Set(['applying', 'analyzing', 'evaluating', 'creating']);
+const SCENARIO_CUE_PATTERNS: RegExp[] = [
+  /\bgiven\b/i, /\bscenario\b/i, /\bsuppose\b/i, /\bconsider\s+(a|the|an)\b/i,
+  /\bcase\s+study\b/i, /\busing\s+the\s+(following|dataset|data|code|figure|table)/i,
+  /\bif\s+a\b/i, /\bwhen\s+a\b/i, /\bin\s+a\s+(situation|project|company|team|system|class|lab)/i,
+  /\b(dataset|sample|excerpt|snippet|diagram|figure|table|chart|log)\b/i,
+  /\bthe\s+following\b/i, /\bbased\s+on\s+the\b/i, /\bdesign\s+a\b/i, /\bdevelop\s+a\b/i,
+  /\bplan\s+a\b/i, /\bcompare\s+\w+\s+and\s+\w+/i, /\bevaluate\s+the\b/i
+];
+function hasScenarioCue(text: string): boolean {
+  return SCENARIO_CUE_PATTERNS.some(p => p.test(text));
+}
+
+// Literal-stem normalization for the deduplication blacklist.
+function normalizeStemForDedup(text: string): string {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+// Strict session-blacklist check used during AI per-slot acceptance.
+// Returns the offending prior stem when a duplicate (literal or semantic) is found.
+function findDuplicateInBlacklist(
+  candidateText: string,
+  blacklist: string[],
+  semanticThreshold = 0.72
+): { hit: true; offender: string; similarity: number } | { hit: false } {
+  const norm = normalizeStemForDedup(candidateText);
+  if (!norm) return { hit: false };
+  for (const prior of blacklist) {
+    const priorNorm = normalizeStemForDedup(prior);
+    if (!priorNorm) continue;
+    if (priorNorm === norm) {
+      return { hit: true, offender: prior, similarity: 1 };
+    }
+    const sim = calculateTextSimilarity(norm, priorNorm);
+    if (sim >= semanticThreshold) {
+      return { hit: true, offender: prior, similarity: sim };
+    }
+  }
+  return { hit: false };
 }
 
 // ============= CONSTANTS =============
