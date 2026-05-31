@@ -2471,15 +2471,17 @@ serve(async (req) => {
       const filledSlotIds = new Set(normalizedQuestions.map(q => q.slot_id || q.metadata?.slot_id).filter(Boolean));
       const remainingSlots = allSlots.filter(slot => !filledSlotIds.has(slot.id));
       for (let i = 0; i < finalShortfall; i++) {
+        const fallbackTopic = body.distributions[0]?.topic || 'General Topic';
         const slot = remainingSlots[i] || allSlots[(normalizedQuestions.length + i) % allSlots.length] || {
           id: `final_fallback_${i}`,
-          topic: body.distributions[0]?.topic || 'General Topic',
+          topic: fallbackTopic,
           bloomLevel: 'understanding',
           difficulty: 'average',
           knowledgeDimension: 'conceptual',
           questionType: 'mcq' as const,
           points: 1,
-          filled: false
+          filled: false,
+          coordinate: { topic: fallbackTopic, cognitive_level: 'understanding', index: -1 }
         };
         normalizedQuestions.push(createFallbackQuestion(slot, 'Final completion fallback after retries', i));
       }
