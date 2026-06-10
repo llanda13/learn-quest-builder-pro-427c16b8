@@ -10,7 +10,10 @@ import { useToast } from "@/hooks/use-toast";
 import { usePDFExport } from "@/hooks/usePDFExport";
 import { Skeleton } from "@/components/ui/skeleton";
 import { useTestAutoRepair } from "@/hooks/useTestAutoRepair";
-import { ExamPrintTemplate } from "@/components/print/ExamPrintTemplate";
+import { useExamRenderModel, buildExamRenderModel } from "@/print/useExamRenderModel";
+import { printExam } from "@/print/printExam";
+import { exportExamPdf } from "@/print/exportExamPdf";
+
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
@@ -85,7 +88,7 @@ export default function GeneratedTestPage() {
   const { testId } = useParams<{ testId: string }>();
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { exportTestQuestions } = usePDFExport();
+
   const [test, setTest] = useState<any>(null);
   const [loading, setLoading] = useState(true);
   const [showAnswerKey, setShowAnswerKey] = useState(false);
@@ -94,6 +97,9 @@ export default function GeneratedTestPage() {
   const [saving, setSaving] = useState(false);
   const [college, setCollege] = useState<string | null>(null);
   const { checkAndRepair, isRepairing } = useTestAutoRepair(testId);
+
+  const renderModel = useExamRenderModel(test, { college, showAnswerKey });
+
 
   useEffect(() => {
     if (testId) {
@@ -112,13 +118,19 @@ export default function GeneratedTestPage() {
   const fetchTest = async () => {
     try {
       setLoading(true);
-      let data = await GeneratedTests.getById(testId!);
-      
-      if (data) {
-        data = await checkAndRepair(data);
-      }
-      
+      const data = await GeneratedTests.getById(testId!);
+      // Show the test immediately so Print/Export are not blocked behind repair.
       setTest(data);
+      setLoading(false);
+
+      // Run auto-repair in the background; update state when done.
+      if (data) {
+        Promise.resolve(checkAndRepair(data))
+          .then((repaired) => {
+            if (repaired && repaired !== data) setTest(repaired);
+          })
+          .catch((err) => console.warn('Auto-repair failed:', err));
+      }
     } catch (error) {
       console.error("Error fetching test:", error);
       toast({
@@ -126,34 +138,49 @@ export default function GeneratedTestPage() {
         description: "Failed to load test",
         variant: "destructive",
       });
-    } finally {
       setLoading(false);
     }
   };
 
-  const handlePrint = () => {
-    window.print();
+  const handlePrint = async () => {
+    if (!test) return;
+    const t0 = performance.now();
+    // Build a fresh model at click time so the current showAnswerKey flag is
+    // guaranteed to flow through — Print and Export must stay in sync.
+    const model = buildExamRenderModel(test, { college, showAnswerKey });
+    console.info(`[print] showAnswerKey=${showAnswerKey} answerKeyItems=${model.answerKey.length}`);
+    const result = await printExam(model);
+    const elapsed = Math.round(performance.now() - t0);
+    console.info(`[print] dialog opened in ${elapsed}ms`);
+    if (!result.ok && result.error) {
+      toast({ title: "Print failed", description: result.error, variant: "destructive" });
+    }
   };
 
   const handleExport = async () => {
     if (!test) return;
-    const success = await exportTestQuestions(
-      test.items || [],
-      test.title || "Generated Test"
-    );
-    if (success) {
+    const t0 = performance.now();
+    // Build a fresh model at click time using the exact same inputs as Print
+    // so both outputs are identical when "Show Answer Key" is toggled.
+    const model = buildExamRenderModel(test, { college, showAnswerKey });
+    console.info(`[export-pdf] showAnswerKey=${showAnswerKey} answerKeyItems=${model.answerKey.length}`);
+    const result = await exportExamPdf(model);
+    const elapsed = Math.round(performance.now() - t0);
+    console.info(`[export-pdf] generated in ${elapsed}ms`);
+    if (result.ok) {
       toast({
         title: "Export Successful",
-        description: "Test has been exported to PDF",
+        description: `PDF generated in ${(elapsed / 1000).toFixed(2)}s${showAnswerKey ? " (with answer key)" : ""}`,
       });
     } else {
       toast({
         title: "Export Failed",
-        description: "Failed to export test",
+        description: result.error || "Failed to export test",
         variant: "destructive",
       });
     }
   };
+
 
   const handleBack = () => {
     navigate("/teacher/my-tests");
@@ -214,18 +241,17 @@ export default function GeneratedTestPage() {
     }
   };
 
-  if (loading || isRepairing) {
+  if (loading) {
     return (
       <div className="container mx-auto py-8 space-y-6">
         <Skeleton className="h-12 w-full" />
-        <div className="text-center text-muted-foreground">
-          {isRepairing ? 'Repairing incomplete test...' : 'Loading test...'}
-        </div>
+        <div className="text-center text-muted-foreground">Loading test...</div>
         <Skeleton className="h-64 w-full" />
         <Skeleton className="h-96 w-full" />
       </div>
     );
   }
+
 
   if (!test) {
     return (
@@ -269,11 +295,12 @@ export default function GeneratedTestPage() {
 
   return (
     <>
-      {/* Print-only exam template - hidden on screen, shown only when printing */}
-      <ExamPrintTemplate test={test} showAnswerKey={showAnswerKey} />
-      
-      {/* Screen UI - hidden when printing */}
+      {/* Screen UI */}
       <div className="container mx-auto py-8 space-y-6 screen-only">
+      {isRepairing && (
+        <div className="text-xs text-muted-foreground text-center">Refining test in background…</div>
+      )}
+
       {/* Action Buttons */}
       <div className="flex items-center justify-between">
         <Button variant="outline" onClick={handleBack}>

@@ -7,8 +7,10 @@ import { Badge } from '@/components/ui/badge';
 import { Separator } from '@/components/ui/separator';
 import { ArrowLeft, Printer, Download, Key } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
-import { usePDFExport } from '@/hooks/usePDFExport';
-import { ExamPrintView } from '@/components/print/ExamPrintView';
+import { useExamRenderModel } from '@/print/useExamRenderModel';
+import { printExam } from '@/print/printExam';
+import { exportExamPdf } from '@/print/exportExamPdf';
+
 
 interface TestItem {
   id?: string | number;
@@ -58,9 +60,10 @@ export default function TestPreview() {
   const { testId } = useParams<{ testId: string }>();
   const navigate = useNavigate();
   const { toast } = useToast();
-  const { exportTestQuestions } = usePDFExport();
   const [test, setTest] = useState<any>(null);
   const [loading, setLoading] = useState(true);
+  const renderModel = useExamRenderModel(test, { showAnswerKey: true });
+
 
   useEffect(() => {
     if (testId) {
@@ -90,20 +93,31 @@ export default function TestPreview() {
     }
   };
 
-  const handlePrint = () => {
-    window.print();
+  const handlePrint = async () => {
+    if (!test) return;
+    const result = await printExam(renderModel);
+    if (!result.ok && result.error) {
+      toast({ title: 'Print failed', description: result.error, variant: 'destructive' });
+    }
   };
 
   const handleExport = async () => {
     if (!test?.items) return;
-    const success = await exportTestQuestions(test.items, test.title || 'Test');
-    if (success) {
+    const result = await exportExamPdf(renderModel);
+    if (result.ok) {
       toast({
         title: 'Success',
-        description: 'Test exported successfully',
+        description: `PDF generated in ${(result.durationMs / 1000).toFixed(2)}s`,
+      });
+    } else {
+      toast({
+        title: 'Export failed',
+        description: result.error || 'Failed to export test',
+        variant: 'destructive',
       });
     }
   };
+
 
   if (loading) {
     return (
@@ -374,9 +388,8 @@ export default function TestPreview() {
         </Card>
       )}
       </div>
-
-      {/* Print View - Hidden on screen, shown when printing */}
-      <ExamPrintView test={test} showAnswerKey={true} />
     </>
   );
 }
+
+
