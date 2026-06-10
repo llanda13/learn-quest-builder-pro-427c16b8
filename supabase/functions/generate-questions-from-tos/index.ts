@@ -137,6 +137,8 @@ const PROMPT_REINJECTION_INTERVAL = 15;
  */
 interface Slot {
   id: string;
+  itemNumber: number;   // 1..N — pre-assigned at slot expansion, preserved end-to-end
+  sectionId?: string;   // optional: format section id this slot belongs to
   topic: string;
   bloomLevel: string;
   difficulty: string;
@@ -526,8 +528,10 @@ function expandTOSToSlots(distributions: TopicDistribution[], totalItems: number
           }
           // MCQ: Default for everything else
           
+          const thisItem = slotId++;
           slots.push({
-            id: `slot_${slotId++}`,
+            id: `slot_${thisItem}`,
+            itemNumber: thisItem,
             topic,
             bloomLevel: bloom,
             difficulty: level,
@@ -535,7 +539,7 @@ function expandTOSToSlots(distributions: TopicDistribution[], totalItems: number
             questionType,
             points,
             filled: false,
-            coordinate: { topic, cognitive_level: bloom, index: slotId - 1 }
+            coordinate: { topic, cognitive_level: bloom, index: thisItem }
           });
         }
       }
@@ -577,8 +581,10 @@ function expandTOSToSlots(distributions: TopicDistribution[], totalItems: number
   // If rounding caused fewer slots than totalItems, add MCQ slots to fill
   while (slots.length < totalItems) {
     const dist = distributions[slots.length % distributions.length];
+    const thisItem = slotId++;
     slots.push({
-      id: `slot_${slotId++}`,
+      id: `slot_${thisItem}`,
+      itemNumber: thisItem,
       topic: dist.topic,
       bloomLevel: 'understanding',
       difficulty: 'average',
@@ -586,13 +592,22 @@ function expandTOSToSlots(distributions: TopicDistribution[], totalItems: number
       questionType: 'mcq',
       points: POINTS.mcq,
       filled: false,
-      coordinate: { topic: dist.topic, cognitive_level: 'understanding', index: slotId - 1 }
+      coordinate: { topic: dist.topic, cognitive_level: 'understanding', index: thisItem }
     });
   }
   // If rounding created more slots than totalItems, trim
   if (slots.length > totalItems) {
     slots.length = totalItems;
   }
+
+  // CRITICAL: rebind itemNumber to dense 1..N after any reordering/trimming.
+  // Down-stream code relies on `slot.itemNumber` being authoritative — never derived
+  // from array index at response time — to keep topic-to-index routing stable across
+  // bank fill, AI fill, repair, and fallback paths.
+  slots.forEach((s, i) => {
+    s.itemNumber = i + 1;
+    s.coordinate = { ...s.coordinate, index: i + 1 };
+  });
 
   const typeCounts = {
     mcq: slots.filter(s => s.questionType === 'mcq').length,
@@ -2116,7 +2131,199 @@ Return ONLY valid JSON:
   }).filter((q: any) => q.question_text && q.question_text.length > 20);
 }
 
+// ============= VALIDATION GATE =============
+// Centralized post-generation validation. Every exported question must pass
+// every check or be flagged `needs_review` and excluded from the final export
+// unless a teacher explicitly approves it.
+
+const PLACEHOLDER_PATTERNS = [
+  /\blorem\s+ipsum\b/i,
+  /\btodo\b/i,
+  /\bplaceholder\b/i,
+  /\bexample\s+(?:question|answer|text)\b/i,
+  /\bquestion\s*#?\s*\d+\s*$/i,
+  /<[a-z_]+>/i,                 // <topic>, <subject>
+  /\{\{?\s*[a-z_]+\s*\}?\}/i,   // {topic}, {{topic}}
+  /\[(?:topic|subject|insert)[^\]]*\]/i,
+];
+
+const BLOOM_NORMALIZE: Record<string, string> = {
+  remember: 'remembering', remembering: 'remembering',
+  understand: 'understanding', understanding: 'understanding', comprehension: 'understanding',
+  apply: 'applying', applying: 'applying', application: 'applying',
+  analyze: 'analyzing', analyzing: 'analyzing', analysis: 'analyzing',
+  evaluate: 'evaluating', evaluating: 'evaluating', evaluation: 'evaluating',
+  create: 'creating', creating: 'creating', synthesis: 'creating',
+};
+
+const BLOOM_KEYWORDS: Record<string, string[]> = {
+  remembering: ['define', 'list', 'name', 'identify', 'state', 'recall', 'what is', 'who', 'when', 'where'],
+  understanding: ['explain', 'describe', 'summarize', 'interpret', 'classify', 'why', 'how does'],
+  applying: ['apply', 'use', 'demonstrate', 'solve', 'calculate', 'implement', 'show how', 'given'],
+  analyzing: ['analyze', 'compare', 'contrast', 'differentiate', 'examine', 'distinguish', 'break down'],
+  evaluating: ['evaluate', 'justify', 'critique', 'assess', 'judge', 'defend', 'recommend', 'which is best'],
+  creating: ['create', 'design', 'develop', 'construct', 'propose', 'formulate', 'devise', 'plan'],
+};
+
+function normalizeBloom(b: string | undefined): string {
+  if (!b) return 'understanding';
+  const k = String(b).trim().toLowerCase();
+  return BLOOM_NORMALIZE[k] || k;
+}
+
+function tokenize(text: string): string[] {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9+#\s-]/g, ' ')
+    .split(/\s+/)
+    .filter(w => w.length >= 3);
+}
+
+function jaccard(a: Set<string>, b: Set<string>): number {
+  if (a.size === 0 || b.size === 0) return 0;
+  let inter = 0;
+  for (const x of a) if (b.has(x)) inter++;
+  return inter / (a.size + b.size - inter);
+}
+
+function detectBloomFromText(text: string): { level: string; score: number } {
+  const lower = ` ${text.toLowerCase()} `;
+  let best = { level: 'understanding', score: 0 };
+  for (const [level, kws] of Object.entries(BLOOM_KEYWORDS)) {
+    const hits = kws.reduce((n, k) => n + (lower.includes(` ${k} `) || lower.includes(` ${k}`) ? 1 : 0), 0);
+    if (hits > best.score) best = { level, score: hits };
+  }
+  return best;
+}
+
+interface ValidationCheck {
+  topic: boolean;
+  bloom: boolean;
+  uniqueness: boolean;
+  quality: boolean;
+  specificity: boolean;
+}
+
+interface ValidationResult {
+  status: 'accepted' | 'needs_review';
+  reasons: string[];
+  checks: ValidationCheck;
+  bloomDetected: string;
+  similarityMax: number;
+  similarityAgainst?: number;
+  topicMatched: boolean;
+}
+
+function validateQuestion(
+  q: any,
+  index: number,
+  allTopics: string[],
+  acceptedTexts: { idx: number; tokens: Set<string>; text: string }[],
+  subjectVocab: Set<string>,
+  similarityThreshold = 0.85,
+): ValidationResult {
+  const reasons: string[] = [];
+  const text: string = q.question_text || q.text || '';
+  const assignedTopic: string = q.topic || '';
+  const assignedBloom = normalizeBloom(q.bloom_level);
+
+  // 1. QUALITY — placeholders / length / MCQ shape
+  let quality = true;
+  if (!text || text.trim().length < 15) { quality = false; reasons.push('quality:stem_too_short'); }
+  for (const re of PLACEHOLDER_PATTERNS) {
+    if (re.test(text)) { quality = false; reasons.push(`quality:placeholder(${re.source})`); break; }
+  }
+  if (q.question_type === 'mcq') {
+    const choices: any[] = Array.isArray(q.choices) ? q.choices : [];
+    const opts = choices.map(c => String(typeof c === 'string' ? c : c?.text ?? '').trim()).filter(Boolean);
+    if (opts.length < 2) { quality = false; reasons.push('quality:mcq_missing_options'); }
+    if (new Set(opts.map(o => o.toLowerCase())).size !== opts.length) { quality = false; reasons.push('quality:mcq_duplicate_options'); }
+    const correct = String(q.correct_answer ?? '').trim().toLowerCase();
+    if (correct && opts.length && !opts.map(o => o.toLowerCase()).includes(correct)) {
+      // tolerate index-style answers ("A", "0")
+      if (!/^[a-d0-9]$/i.test(correct)) { quality = false; reasons.push('quality:mcq_correct_not_in_options'); }
+    }
+  }
+
+  // 2. TOPIC ALIGNMENT — best-matched topic must be the assigned one
+  const stemTokens = new Set(tokenize(text));
+  let bestTopic = assignedTopic;
+  let bestSim = 0;
+  for (const t of allTopics) {
+    const sim = jaccard(stemTokens, new Set(tokenize(t)));
+    if (sim > bestSim) { bestSim = sim; bestTopic = t; }
+  }
+  // assigned topic gets a small bias because TOS placement is authoritative
+  const assignedSim = jaccard(stemTokens, new Set(tokenize(assignedTopic)));
+  const topicMatched = bestTopic === assignedTopic || assignedSim >= bestSim - 0.05;
+  if (!topicMatched) reasons.push(`topic:drift(assigned="${assignedTopic}",best="${bestTopic}")`);
+
+  // 3. BLOOM ALIGNMENT — detected level should match or be adjacent
+  const detected = detectBloomFromText(text);
+  const order = ['remembering', 'understanding', 'applying', 'analyzing', 'evaluating', 'creating'];
+  const di = order.indexOf(detected.level);
+  const ai = order.indexOf(assignedBloom);
+  const bloomMatched =
+    detected.score === 0 || // no keyword evidence — don't penalize
+    di === ai ||
+    Math.abs(di - ai) <= 1;
+  if (!bloomMatched) reasons.push(`bloom:mismatch(assigned=${assignedBloom},detected=${detected.level})`);
+
+  // 4. UNIQUENESS — Jaccard against every already-accepted item
+  let similarityMax = 0;
+  let similarityAgainst: number | undefined;
+  for (const prev of acceptedTexts) {
+    const sim = jaccard(stemTokens, prev.tokens);
+    if (sim > similarityMax) { similarityMax = sim; similarityAgainst = prev.idx; }
+  }
+  const uniqueness = similarityMax < similarityThreshold;
+  if (!uniqueness) reasons.push(`uniqueness:duplicate(sim=${similarityMax.toFixed(2)},against_item=${similarityAgainst})`);
+
+  // 5. SUBJECT SPECIFICITY — at least one subject-vocabulary token in stem
+  const specificity =
+    subjectVocab.size === 0 ||
+    Array.from(stemTokens).some(t => subjectVocab.has(t)) ||
+    Array.from(subjectVocab).some(v => text.toLowerCase().includes(v));
+  if (!specificity) reasons.push('specificity:no_subject_vocab');
+
+  const checks: ValidationCheck = { topic: topicMatched, bloom: bloomMatched, uniqueness, quality, specificity };
+  const allPass = topicMatched && bloomMatched && uniqueness && quality && specificity;
+
+  return {
+    status: allPass ? 'accepted' : 'needs_review',
+    reasons,
+    checks,
+    bloomDetected: detected.level,
+    similarityMax: Number(similarityMax.toFixed(3)),
+    similarityAgainst,
+    topicMatched,
+  };
+}
+
+function runValidationGate(
+  questions: any[],
+  allTopics: string[],
+  subjectVocab: Set<string>,
+): { results: ValidationResult[]; questions: any[] } {
+  const accepted: { idx: number; tokens: Set<string>; text: string }[] = [];
+  const results: ValidationResult[] = [];
+  questions.forEach((q, i) => {
+    const r = validateQuestion(q, i, allTopics, accepted, subjectVocab);
+    results.push(r);
+    q.validation_status = r.status;
+    q.validation_checks = r.checks;
+    q.validation_reasons = r.reasons;
+    q.bloom_detected = r.bloomDetected;
+    q.similarity_max = r.similarityMax;
+    if (r.status === 'needs_review') q.needs_review = true;
+    accepted.push({ idx: i + 1, tokens: new Set(tokenize(q.question_text || '')), text: q.question_text || '' });
+  });
+  return { results, questions };
+}
+
 // ============= MAIN HANDLER =============
+
+
 
 serve(async (req) => {
   if (req.method === 'OPTIONS') {
@@ -2226,11 +2433,19 @@ serve(async (req) => {
     // ============= STEP 3: NORMALIZE, VALIDATE & COMPLETION GATE =============
     console.log(`\n🔧 === NORMALIZATION & VALIDATION PHASE ===`);
     
+    // Index-preserving raw pull: walk slots in order so item position == TOS position.
+    // Every question carries its slot's authoritative item_number / topic / section.
     const rawQuestions: any[] = [];
     for (const slot of allSlots) {
       const filledSlot = filledById.get(slot.id);
       if (filledSlot && filledSlot.question) {
         filledSlot.question.slot_id = slot.id;
+        filledSlot.question.item_number = slot.itemNumber;
+        filledSlot.question.section_id = slot.sectionId;
+        // Pin the slot's TOS topic onto the question so downstream stages
+        // (validation, export) cannot accidentally rewrite the index→topic mapping.
+        filledSlot.question.topic = slot.topic;
+        filledSlot.question.bloom_level = filledSlot.question.bloom_level || slot.bloomLevel;
         filledSlot.question.points = filledSlot.points;
         rawQuestions.push(filledSlot.question);
       }
@@ -2338,102 +2553,78 @@ serve(async (req) => {
     console.log(`   ✅ Normalized: ${normalizedQuestions.length} questions accepted`);
     console.log(`   ❌ Rejected: ${rejectedQuestions.length} questions (redundant/invalid)`);
 
-    // ============= STEP 4: COMPLETION GATE - ENFORCE EXACT TOS COUNT =============
+    // ============= STEP 4: COMPLETION GATE — SLOT-ID INDEXED =============
+    // Build authoritative slot→question map. Every repair / fallback writes BACK to
+    // the same slot, so item_number / topic / section binding cannot drift.
     const requiredTotal = body.total_items;
+    const questionBySlot = new Map<string, any>();
+    for (const q of normalizedQuestions) {
+      if (q.slot_id) questionBySlot.set(q.slot_id, q);
+    }
+    const slotsMissing = () => allSlots.filter(s => !questionBySlot.has(s.id));
+
     let completionAttempts = 0;
     const MAX_COMPLETION_ATTEMPTS = 5;
-    
-    while (normalizedQuestions.length < requiredTotal && completionAttempts < MAX_COMPLETION_ATTEMPTS) {
+
+    while (slotsMissing().length > 0 && completionAttempts < MAX_COMPLETION_ATTEMPTS) {
       completionAttempts++;
-      const shortfall = requiredTotal - normalizedQuestions.length;
-      
+      const slotsToFill = slotsMissing();
       console.log(`\n🔄 === COMPLETION GATE RETRY ${completionAttempts}/${MAX_COMPLETION_ATTEMPTS} ===`);
-      console.log(`   📊 Current: ${normalizedQuestions.length}/${requiredTotal} (need ${shortfall} more)`);
-      
-      // Determine which slots were not filled or had questions rejected
-      const unfilledSlots: Slot[] = [];
-      const usedSlotIds = new Set(normalizedQuestions.map(q => q.slot_id || q.id));
-      
-      for (const slot of allSlots) {
-        const filledSlot = filledById.get(slot.id);
-        if (!filledSlot || !filledSlot.filled) {
-          unfilledSlots.push(slot);
-        } else if (!usedSlotIds.has(slot.id) && !usedSlotIds.has(filledSlot.question?.id)) {
-          // This slot had a question but it was rejected during validation
-          unfilledSlots.push(slot);
-        }
-      }
-      
-      // If we can't identify unfilled slots, create generic MCQ slots for the shortfall
-      const slotsToFill = unfilledSlots.length > 0 
-        ? unfilledSlots.slice(0, shortfall)
-        : Array.from({ length: shortfall }, (_, i) => {
-            const topic = body.distributions[0]?.topic || 'General';
-            const bloom = ['remembering', 'understanding', 'applying'][i % 3];
-            return {
-              id: `repair_slot_${completionAttempts}_${i}`,
-              topic,
-              bloomLevel: bloom,
-              difficulty: ['easy', 'average', 'difficult'][i % 3],
-              knowledgeDimension: 'conceptual',
-              questionType: 'mcq' as const,
-              points: 1,
-              filled: false,
-              coordinate: { topic, cognitive_level: bloom, index: -1 }
-            };
-          });
-      
-      console.log(`   🎯 Generating ${slotsToFill.length} repair questions...`);
-      
-      // Generate repair questions using AI
+      console.log(`   📊 Filled: ${questionBySlot.size}/${requiredTotal} — repairing ${slotsToFill.length} unfilled slots (item #s: ${slotsToFill.slice(0, 10).map(s => s.itemNumber).join(',')}${slotsToFill.length > 10 ? '…' : ''})`);
+
       const aiRepairKey = Deno.env.get('LOVABLE_API_KEY') || Deno.env.get('OPENAI_API_KEY');
       if (!aiRepairKey) {
-        console.warn(`   🛟 No AI key for repair; filling ${slotsToFill.length} slots with fallback questions`);
-        for (const [index, slot] of slotsToFill.entries()) {
-          const q = createFallbackQuestion(slot, 'No AI API key during repair', index);
-          normalizedQuestions.push(q);
+        console.warn(`   🛟 No AI key for repair; fallback-filling ${slotsToFill.length} slots in place`);
+        for (const slot of slotsToFill) {
+          const q = createFallbackQuestion(slot, 'No AI API key during repair', slot.itemNumber);
+          q.slot_id = slot.id;
+          q.item_number = slot.itemNumber;
+          q.section_id = slot.sectionId;
+          q.topic = slot.topic;
+          questionBySlot.set(slot.id, q);
           acceptedTexts.push(String(q.question_text).toLowerCase());
         }
-        continue;
+        break;
       }
-      
+
       const repairFilled = await fillSlotsWithAI(slotsToFill, registry, subjectCtx);
-      
-      // Validate and add repair questions
       let repairAccepted = 0;
       for (const slot of repairFilled) {
         if (!slot.filled || !slot.question) continue;
-        
         const q = slot.question;
         q.points = slot.points || 1;
-        
+        q.slot_id = slot.id;
+        q.item_number = slot.itemNumber;
+        q.section_id = slot.sectionId;
+        q.topic = slot.topic;
+        q.bloom_level = q.bloom_level || slot.bloomLevel;
+
         const normalizedText = normalizeQuestionText(q.question_text || '');
-        
-        // Check for redundancy against existing accepted questions
         const similarityCheck = checkSemanticRedundancy(normalizedText, acceptedTexts, 0.88);
         if (similarityCheck.isRedundant) {
-          console.warn(`   🔁 Repair question near-duplicate flagged, accepting with review note`);
           q.needs_review = true;
           q.validation_notes = (q.validation_notes ? q.validation_notes + '; ' : '') + `Repair near-duplicate (${((similarityCheck.similarity || 0) * 100).toFixed(0)}%)`;
         }
-        
-        // Validate MCQ structure
+
         if (q.question_type === 'mcq') {
           const choices = q.choices;
           if (!choices || typeof choices !== 'object') {
-            const fallback = createFallbackQuestion(slot, 'Repair MCQ missing choices', repairAccepted);
-            normalizedQuestions.push(fallback);
-            acceptedTexts.push(String(fallback.question_text).toLowerCase());
+            const fb = createFallbackQuestion(slot, 'Repair MCQ missing choices', slot.itemNumber);
+            fb.slot_id = slot.id;
+            fb.item_number = slot.itemNumber;
+            fb.section_id = slot.sectionId;
+            questionBySlot.set(slot.id, fb);
+            acceptedTexts.push(String(fb.question_text).toLowerCase());
             repairAccepted++;
             continue;
           }
-          const hasAllOptions = ['A', 'B', 'C', 'D'].every(key => 
+          const hasAllOptions = ['A', 'B', 'C', 'D'].every(key =>
             choices[key] && typeof choices[key] === 'string' && choices[key].trim().length > 5
           );
           if (!hasAllOptions) {
             for (const key of ['A', 'B', 'C', 'D']) {
               if (!choices[key] || typeof choices[key] !== 'string' || choices[key].trim().length <= 5) {
-                choices[key] = `Fallback option ${key} about ${q.topic || slot.topic}`;
+                choices[key] = `Fallback option ${key} about ${slot.topic}`;
               }
             }
             q.needs_review = true;
@@ -2444,64 +2635,52 @@ serve(async (req) => {
             q.needs_review = true;
           }
         }
-        
+
         q.question_text = normalizedText;
-        q.metadata = { ...(q.metadata || {}), repair_attempt: completionAttempts };
-        normalizedQuestions.push(q);
+        q.metadata = { ...(q.metadata || {}), repair_attempt: completionAttempts, slot_id: slot.id };
+        questionBySlot.set(slot.id, q);
         acceptedTexts.push(normalizedText.toLowerCase());
         repairAccepted++;
       }
-      
-      console.log(`   ✅ Repair attempt ${completionAttempts}: added ${repairAccepted} questions`);
-      console.log(`   📊 New total: ${normalizedQuestions.length}/${requiredTotal}`);
-      
-      // If no progress was made, break to avoid infinite loop
+
+      console.log(`   ✅ Repair attempt ${completionAttempts}: filled ${repairAccepted} slots — total ${questionBySlot.size}/${requiredTotal}`);
+
+      // If no progress, fallback-fill any still-missing slots so item position stays bound.
       if (repairAccepted === 0) {
-        console.warn(`   🛟 No AI repair progress; fallback-filling ${slotsToFill.length} slots`);
-        for (const [index, slot] of slotsToFill.entries()) {
-          const q = createFallbackQuestion(slot, `No valid AI repair output on attempt ${completionAttempts}`, index);
-          normalizedQuestions.push(q);
+        for (const slot of slotsMissing()) {
+          const q = createFallbackQuestion(slot, `No valid AI repair output on attempt ${completionAttempts}`, slot.itemNumber);
+          q.slot_id = slot.id;
+          q.item_number = slot.itemNumber;
+          q.section_id = slot.sectionId;
+          q.topic = slot.topic;
+          questionBySlot.set(slot.id, q);
           acceptedTexts.push(String(q.question_text).toLowerCase());
-          repairAccepted++;
         }
+        break;
       }
     }
-    
-    // ============= STEP 5: FINAL FILL — guarantee exact TOS count =============
-    // If still short after AI repair, fill with placeholder MCQs flagged for review
-    // rather than hard-failing the entire generation.
-    if (normalizedQuestions.length < requiredTotal) {
-      const finalShortfall = requiredTotal - normalizedQuestions.length;
-      console.warn(`\n⚠️ === SOFT-FILL ${finalShortfall} REMAINING SLOTS ===`);
-      console.warn(`   Required: ${requiredTotal}, Generated: ${normalizedQuestions.length}`);
-      const filledSlotIds = new Set(normalizedQuestions.map(q => q.slot_id || q.metadata?.slot_id).filter(Boolean));
-      const remainingSlots = allSlots.filter(slot => !filledSlotIds.has(slot.id));
-      for (let i = 0; i < finalShortfall; i++) {
-        const fallbackTopic = body.distributions[0]?.topic || 'General Topic';
-        const slot = remainingSlots[i] || allSlots[(normalizedQuestions.length + i) % allSlots.length] || {
-          id: `final_fallback_${i}`,
-          topic: fallbackTopic,
-          bloomLevel: 'understanding',
-          difficulty: 'average',
-          knowledgeDimension: 'conceptual',
-          questionType: 'mcq' as const,
-          points: 1,
-          filled: false,
-          coordinate: { topic: fallbackTopic, cognitive_level: 'understanding', index: -1 }
-        };
-        normalizedQuestions.push(createFallbackQuestion(slot, 'Final completion fallback after retries', i));
-      }
+
+    // ============= STEP 5: FINAL FILL — any still-missing slot gets a fallback IN PLACE =============
+    for (const slot of slotsMissing()) {
+      console.warn(`   🛟 Final fallback for unfilled slot #${slot.itemNumber} (topic="${slot.topic}", bloom=${slot.bloomLevel})`);
+      const q = createFallbackQuestion(slot, 'Final completion fallback after retries', slot.itemNumber);
+      q.slot_id = slot.id;
+      q.item_number = slot.itemNumber;
+      q.section_id = slot.sectionId;
+      q.topic = slot.topic;
+      questionBySlot.set(slot.id, q);
     }
-    
-    // Trim to exact count (in case we generated extra)
-    const trimmedQuestions = normalizedQuestions.slice(0, requiredTotal);
-    
+
+    // Ordered output: index in `trimmedQuestions` is exactly `itemNumber - 1`. No slicing magic.
+    const trimmedQuestions = allSlots.map(s => questionBySlot.get(s.id));
+
     // Verify we have exactly the required count
-    if (trimmedQuestions.length !== requiredTotal) {
+    if (trimmedQuestions.length !== requiredTotal || trimmedQuestions.some(q => !q)) {
       throw new Error(
-        `Final validation failed: expected ${requiredTotal} questions, got ${trimmedQuestions.length}`
+        `Final validation failed: expected ${requiredTotal} questions, got ${trimmedQuestions.filter(Boolean).length}`
       );
     }
+
     
     console.log(`\n✅ === TOS CONTRACT SATISFIED ===`);
     console.log(`   Generated exactly ${trimmedQuestions.length}/${requiredTotal} questions`);
@@ -2561,27 +2740,84 @@ serve(async (req) => {
 
     console.log(`\n✅ === GENERATION COMPLETE ===`);
 
+    // ============= POST-GENERATION VALIDATION GATE =============
+    // Every exported question must pass topic / bloom / uniqueness / quality / specificity
+    // PLUS the new topic-to-index routing checks.
+    const allTopics = Array.from(new Set(body.distributions.map(d => d.topic)));
+    const subjectVocab = new Set<string>();
+    allTopics.forEach(t => tokenize(t).forEach(tok => subjectVocab.add(tok)));
+    const { results: validation } = runValidationGate(trimmedQuestions, allTopics, subjectVocab);
+
+    // Topic-to-index routing guard: question's topic and item_number MUST match the slot's.
+    // Any drift = needs_review with explicit reason so QA can prove the binding holds.
+    trimmedQuestions.forEach((q: any, i: number) => {
+      const slot = allSlots[i];
+      const v = validation[i];
+      if (!slot || !v) return;
+      const routingReasons: string[] = [];
+      if (q.slot_id !== slot.id) routingReasons.push(`routing:slot_mismatch(expected=${slot.id},got=${q.slot_id})`);
+      if (q.item_number !== slot.itemNumber) routingReasons.push(`routing:item_number_mismatch(expected=${slot.itemNumber},got=${q.item_number})`);
+      if ((q.topic || '').toString().trim().toLowerCase() !== slot.topic.toString().trim().toLowerCase()) {
+        routingReasons.push(`routing:topic_index_mismatch(expected="${slot.topic}",got="${q.topic}")`);
+      }
+      if (slot.sectionId && q.section_id && q.section_id !== slot.sectionId) {
+        routingReasons.push(`routing:section_mismatch(expected=${slot.sectionId},got=${q.section_id})`);
+      }
+      if (routingReasons.length) {
+        v.status = 'needs_review';
+        v.reasons.push(...routingReasons);
+        v.checks = { ...v.checks, routing: false };
+        q.validation_status = 'needs_review';
+        q.validation_reasons = (q.validation_reasons || []).concat(routingReasons);
+        q.needs_review = true;
+      } else {
+        v.checks = { ...v.checks, routing: true };
+      }
+    });
+
+    const validationSummary = {
+      total: trimmedQuestions.length,
+      accepted: validation.filter(v => v.status === 'accepted').length,
+      needs_review: validation.filter(v => v.status === 'needs_review').length,
+      by_failure: validation.reduce((acc: Record<string, number>, v) => {
+        v.reasons.forEach(r => { const k = r.split(':')[0]; acc[k] = (acc[k] || 0) + 1; });
+        return acc;
+      }, {}),
+    };
+    (stats as any).validation = validationSummary;
+    console.log('🛡️  Validation gate:', JSON.stringify(validationSummary));
+
     return new Response(JSON.stringify({
       success: true,
       questions: trimmedQuestions,
-      generation_log: allSlots.map(s => {
-        const filled = filledById.get(s.id);
+      generation_log: trimmedQuestions.map((q: any, i: number) => {
+        const slot = allSlots[i];
+        const v = validation[i];
         return {
-          slot_id: s.id,
-          topic: s.topic,
-          bloom: s.bloomLevel,
-          difficulty: s.difficulty,
-          question_type: s.questionType,
-          points: s.points,
-          filled: filled?.filled ?? false,
-          source: filled?.source || 'unfilled'
+          item_number: q.item_number ?? slot?.itemNumber ?? i + 1,
+          slot_id: slot?.id,
+          section_id: slot?.sectionId,
+          topic_assigned: slot?.topic,
+          topic_on_question: q.topic,
+          bloom_assigned: slot?.bloomLevel,
+          bloom_detected: v?.bloomDetected,
+          difficulty: q.difficulty,
+          question_type: q.question_type,
+          source: q.metadata?.source || (q.metadata?.repair_attempt ? 'repair' : 'generated'),
+          similarity_max: v?.similarityMax ?? 0,
+          similarity_against_item: v?.similarityAgainst,
+          checks: v?.checks,
+          status: v?.status || 'accepted',
+          reasons: v?.reasons || [],
         };
       }),
+      validation_summary: validationSummary,
       statistics: stats,
       tos_id: body.tos_id
     }), {
       headers: { ...corsHeaders, "Content-Type": "application/json" }
     });
+
 
   } catch (error) {
     console.error('Generation error:', error);
