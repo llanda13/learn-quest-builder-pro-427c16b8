@@ -1,5 +1,11 @@
 import { supabase } from "@/integrations/supabase/client";
 import type { Question } from "@/services/db/questions";
+import { loadRotationSettings } from "@/services/rotation/rotationSettings";
+import {
+  applyRotationOrder,
+  computeRotationWeight,
+  type AcademicPeriod,
+} from "@/services/rotation/rotationEngine";
 
 export interface TOSRequirement {
   topic: string;
@@ -118,42 +124,61 @@ export class IntelligentQuestionSelector {
   }
 
   /**
-   * Select non-redundant questions using semantic similarity
+   * Select non-redundant questions using semantic similarity + rotation.
+   * Applies academic-year cooldown so recently-used questions are deferred.
    */
-  selectNonRedundant(questions: Question[], count: number): Question[] {
-    if (questions.length <= count) {
-      return questions;
-    }
+  async selectNonRedundantWithRotation(
+    questions: Question[],
+    count: number,
+    period: AcademicPeriod,
+    subject?: string | null,
+    similarityThreshold = 0.7
+  ): Promise<Question[]> {
+    if (questions.length <= count) return questions;
+    const settings = await loadRotationSettings(subject ?? null);
 
-    // Sort by usage count (prefer less-used questions)
-    const sorted = [...questions].sort((a, b) => 
-      (a.used_count || 0) - (b.used_count || 0)
-    );
+    // Rotation order: never-used → cooled-down → recent (last resort)
+    const sorted = applyRotationOrder(questions as any, settings, period) as Question[];
 
-    // Select questions with maximum semantic distance
-    const selected: Question[] = [sorted[0]];
-    
-    for (let i = 1; i < sorted.length && selected.length < count; i++) {
-      const candidate = sorted[i];
-      
-      // Check if candidate is semantically different from already selected
-      const isDifferent = this.isSemanticallySufficient(candidate, selected);
-      
-      if (isDifferent) {
+    const selected: Question[] = [];
+    for (const candidate of sorted) {
+      if (selected.length >= count) break;
+      const weight = computeRotationWeight(candidate as any, settings, period);
+      // Skip hard-blocked candidates unless we have no other option
+      if (weight === 0 && selected.length + (sorted.length - selected.length) > count) {
+        continue;
+      }
+      if (this.isSemanticallySufficient(candidate, selected, similarityThreshold)) {
         selected.push(candidate);
       }
     }
 
-    // If we still need more, take the remaining ones
-    while (selected.length < count && sorted.length > selected.length) {
-      const remaining = sorted.filter(q => !selected.includes(q));
-      if (remaining.length > 0) {
-        selected.push(remaining[0]);
-      } else {
-        break;
+    // Backfill if dedup left us short
+    if (selected.length < count) {
+      for (const q of sorted) {
+        if (selected.length >= count) break;
+        if (!selected.includes(q)) selected.push(q);
       }
     }
+    return selected;
+  }
 
+  /**
+   * Backwards-compatible synchronous selector (no rotation context).
+   */
+  selectNonRedundant(questions: Question[], count: number): Question[] {
+    if (questions.length <= count) return questions;
+    const sorted = [...questions].sort(
+      (a, b) => (a.used_count || 0) - (b.used_count || 0)
+    );
+    const selected: Question[] = [sorted[0]];
+    for (let i = 1; i < sorted.length && selected.length < count; i++) {
+      if (this.isSemanticallySufficient(sorted[i], selected)) selected.push(sorted[i]);
+    }
+    while (selected.length < count && sorted.length > selected.length) {
+      const next = sorted.find((q) => !selected.includes(q));
+      if (next) selected.push(next); else break;
+    }
     return selected;
   }
 
@@ -161,31 +186,24 @@ export class IntelligentQuestionSelector {
    * Check if candidate question is semantically different enough
    * In production, this would use embedding vectors
    */
-  private isSemanticallySufficient(candidate: Question, selected: Question[]): boolean {
-    // Simple text-based similarity for now
-    // In production, use embeddings and cosine similarity
-    
-    const candidateText = candidate.question_text.toLowerCase();
-    
+  private isSemanticallySufficient(
+    candidate: Question,
+    selected: Question[],
+    threshold = 0.7
+  ): boolean {
+    const candidateText = (candidate.question_text || "").toLowerCase();
     for (const q of selected) {
-      const selectedText = q.question_text.toLowerCase();
-      
-      // Check for significant overlap in words
+      const selectedText = (q.question_text || "").toLowerCase();
       const candidateWords = new Set(candidateText.split(/\s+/));
       const selectedWords = new Set(selectedText.split(/\s+/));
-      
       const intersection = new Set(
-        [...candidateWords].filter(word => selectedWords.has(word))
+        [...candidateWords].filter((word) => selectedWords.has(word))
       );
-      
-      const similarity = intersection.size / Math.min(candidateWords.size, selectedWords.size);
-      
-      // If too similar, reject
-      if (similarity > 0.7) {
-        return false;
-      }
+      const similarity =
+        intersection.size /
+        Math.max(1, Math.min(candidateWords.size, selectedWords.size));
+      if (similarity > threshold) return false;
     }
-    
     return true;
   }
 
