@@ -17,6 +17,8 @@ import AdminAnalytics from "./pages/admin/Analytics";
 import RecentlyDeleted from "./pages/admin/RecentlyDeleted";
 import AdminSettings from "./pages/admin/Settings";
 import AILogs from "./pages/admin/AILogs";
+import RotationSettingsPage from "./pages/admin/RotationSettings";
+import RotationAudit from "./pages/admin/RotationAudit";
 import TOSPage from "./pages/teacher/TOSPage";
 
 import MyTests from "./pages/teacher/MyTests";
@@ -37,6 +39,11 @@ import { ProtectedRoute } from "./components/ProtectedRoute";
 import { AdminLayout } from "./components/layout/AdminLayout";
 import { TeacherLayout } from "./components/layout/TeacherLayout";
 import NotFound from "./pages/NotFound";
+import { warmPrintAssets } from "./print/assets";
+
+// Pre-fetch the institution logo so Print/Export PDF don't pay for it later.
+warmPrintAssets();
+
 
 // Configure React Query so switching tabs / blurring the window does NOT
 // trigger refetches. This preserves in-memory state (form inputs, AI
@@ -89,6 +96,8 @@ const App = () => {
                         <Route path="test-assembly" element={<TestAssembly />} />
                         <Route path="tests" element={<Tests />} />
                         <Route path="collaboration" element={<Collaboration />} />
+                        <Route path="rotation" element={<RotationSettingsPage />} />
+                        <Route path="rotation-audit" element={<RotationAudit />} />
                         <Route path="settings" element={<AdminSettings />} />
                       </Routes>
                     </AdminLayout>

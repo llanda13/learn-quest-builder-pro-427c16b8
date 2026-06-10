@@ -11,7 +11,9 @@ import {
   ChevronLeft,
   ChevronRight,
   Brain,
-  Upload
+  Upload,
+  Rotate3D,
+  History as HistoryIcon
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -53,6 +55,18 @@ const adminMenuItems = [
     href: "/admin/recently-deleted", 
     icon: Archive,
     description: "Archive & recovery" 
+  },
+  {
+    title: "Rotation Settings",
+    href: "/admin/rotation",
+    icon: Rotate3D,
+    description: "Question reuse rules"
+  },
+  {
+    title: "Rotation Audit",
+    href: "/admin/rotation-audit",
+    icon: HistoryIcon,
+    description: "Reuse history report"
   },
 ];
 
