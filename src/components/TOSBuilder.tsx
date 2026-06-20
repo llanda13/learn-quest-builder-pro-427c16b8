@@ -246,7 +246,84 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
     }
   }, [autoGeneratePending]);
 
+  // ─── Auto-populate institutional fields from profile + system settings ───
+  // Runs once when the user is available. Only fills empty fields so we never
+  // overwrite a value already provided by a template, persisted draft, or
+  // manual edit. Centralized records keep these values consistent across TOS.
+  useEffect(() => {
+    if (!user?.id || autoFilledRef.current) return;
+    autoFilledRef.current = true;
+
+    (async () => {
+      try {
+        const [profileRes, settingsRes] = await Promise.all([
+          supabase.from('profiles').select('full_name, college').eq('id', user.id).maybeSingle(),
+          supabase.from('system_settings').select('key, value').in('key', ['active_school_year', 'dept_officers']),
+        ]);
+
+        const fullName = (profileRes.data as any)?.full_name as string | undefined;
+        const department = (profileRes.data as any)?.college as string | undefined;
+        const settingMap = new Map<string, any>((settingsRes.data ?? []).map((r: any) => [r.key, r.value]));
+        const activeSY = settingMap.get('active_school_year');
+        const officers = (settingMap.get('dept_officers') ?? {}) as Record<string, { chairperson?: string; dean?: string }>;
+        const deptOfficers = department ? officers[department] : undefined;
+
+        const apply = (field: keyof TOSFormData, value: string | undefined) => {
+          if (!value) return;
+          const current = (form.getValues(field) as string | undefined) ?? '';
+          if (!current.trim()) {
+            setValue(field, value as any, { shouldDirty: false });
+          }
+        };
+
+        apply('prepared_by', fullName);
+        apply('school_year', typeof activeSY === 'string' ? activeSY : undefined);
+        apply('checked_by', deptOfficers?.chairperson);
+        apply('noted_by', deptOfficers?.dean);
+      } catch (err) {
+        console.warn('TOS auto-fill from profile/settings failed:', err);
+      }
+    })();
+  }, [user?.id, setValue, form]);
+
+  // ─── Subject lookup: when the user enters/changes Subject No, fetch the
+  // matching subject record from the centralized Subjects database and
+  // auto-fill Subject Description + Course. Case-insensitive code match.
+  const lookupSubject = async (rawCode: string) => {
+    const code = rawCode.trim();
+    if (!code) {
+      setSubjectLookupStatus('idle');
+      return;
+    }
+    setSubjectLookupStatus('looking');
+    try {
+      const { data, error } = await supabase
+        .from('academic_subjects')
+        .select('description, specialization_id, academic_specializations(name)')
+        .ilike('code', code)
+        .eq('deleted', false)
+        .maybeSingle();
+
+      if (error || !data) {
+        setSubjectLookupStatus('missing');
+        return;
+      }
+
+      const description = (data as any).description as string | undefined;
+      const courseName = (data as any).academic_specializations?.name as string | undefined;
+
+      if (description) setValue('description', description, { shouldDirty: true, shouldValidate: true });
+      if (courseName) setValue('course', courseName, { shouldDirty: true, shouldValidate: true });
+      setSubjectLookupStatus('found');
+    } catch (err) {
+      console.warn('Subject lookup failed:', err);
+      setSubjectLookupStatus('missing');
+    }
+  };
+
   const watchedTotalItems = watch("total_items");
+
+
 
   const addTopic = () => {
     const newTopics = [...topics, { topic: "", hours: 0 }];
