@@ -771,20 +771,33 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
                 <Label htmlFor="subjectNo">Subject No.</Label>
                 <Input
                   id="subjectNo"
-                  {...register("subject_no")}
+                  {...register("subject_no", {
+                    onBlur: (e) => lookupSubject(e.target.value),
+                  })}
                   placeholder="e.g., IS 9"
                 />
+                {subjectLookupStatus === 'looking' && (
+                  <p className="text-xs text-muted-foreground mt-1">Looking up subject…</p>
+                )}
+                {subjectLookupStatus === 'found' && (
+                  <p className="text-xs text-primary mt-1">Course & description auto-filled from Subjects database.</p>
+                )}
+                {subjectLookupStatus === 'missing' && (
+                  <p className="text-xs text-amber-600 mt-1">Subject not found in central database — please ask an admin to add it.</p>
+                )}
                 {errors.subject_no && (
                   <p className="text-sm text-destructive mt-1">{errors.subject_no.message}</p>
                 )}
               </div>
-              
+
               <div>
-                <Label htmlFor="course">Course</Label>
+                <Label htmlFor="course">Course <span className="text-xs text-muted-foreground">(auto)</span></Label>
                 <Input
                   id="course"
                   {...register("course")}
-                  placeholder="e.g., BSIS"
+                  placeholder="Auto-filled from Subject No."
+                  readOnly
+                  className="bg-muted/40"
                 />
                 {errors.course && (
                   <p className="text-sm text-destructive mt-1">{errors.course.message}</p>
@@ -792,11 +805,13 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
               </div>
 
               <div className="md:col-span-2">
-                <Label htmlFor="subjectDescription">Subject Description</Label>
+                <Label htmlFor="subjectDescription">Subject Description <span className="text-xs text-muted-foreground">(auto)</span></Label>
                 <Input
                   id="subjectDescription"
                   {...register("description")}
-                  placeholder="e.g., System Analysis and Design"
+                  placeholder="Auto-filled from Subject No."
+                  readOnly
+                  className="bg-muted/40"
                 />
                 {errors.description && (
                   <p className="text-sm text-destructive mt-1">{errors.description.message}</p>
