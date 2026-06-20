@@ -31,6 +31,11 @@ export default function Settings() {
   const [healthAlerts, setHealthAlerts] = useState(true);
   const [loadingSettings, setLoadingSettings] = useState(true);
 
+  // Institutional defaults
+  const [activeSchoolYear, setActiveSchoolYear] = useState('');
+  const [deptOfficers, setDeptOfficers] = useState<Array<{ department: string; chairperson: string; dean: string }>>([]);
+  const [savingInstitutional, setSavingInstitutional] = useState(false);
+
   // Load persisted settings on mount
   useEffect(() => {
     const loadSettings = async () => {
