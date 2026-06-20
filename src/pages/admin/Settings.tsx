@@ -40,13 +40,25 @@ export default function Settings() {
   useEffect(() => {
     const loadSettings = async () => {
       try {
-        const { data, error } = await supabase
+        const { data } = await supabase
           .from('system_settings')
           .select('key, value')
-          .eq('key', 'health_alerts_enabled')
-          .single();
-        if (!error && data) {
-          setHealthAlerts(data.value === true);
+          .in('key', ['health_alerts_enabled', 'active_school_year', 'dept_officers']);
+        const map = new Map<string, any>((data ?? []).map((r: any) => [r.key, r.value]));
+        if (typeof map.get('health_alerts_enabled') === 'boolean') {
+          setHealthAlerts(map.get('health_alerts_enabled'));
+        }
+        const sy = map.get('active_school_year');
+        if (typeof sy === 'string') setActiveSchoolYear(sy);
+        const officers = map.get('dept_officers');
+        if (officers && typeof officers === 'object') {
+          setDeptOfficers(
+            Object.entries(officers as Record<string, any>).map(([department, v]) => ({
+              department,
+              chairperson: (v as any)?.chairperson ?? '',
+              dean: (v as any)?.dean ?? '',
+            }))
+          );
         }
       } catch {
         // Use default
@@ -56,6 +68,37 @@ export default function Settings() {
     };
     loadSettings();
   }, []);
+
+  const saveInstitutionalDefaults = async () => {
+    setSavingInstitutional(true);
+    try {
+      const officersMap: Record<string, { chairperson: string; dean: string }> = {};
+      for (const row of deptOfficers) {
+        const dept = row.department.trim();
+        if (!dept) continue;
+        officersMap[dept] = { chairperson: row.chairperson.trim(), dean: row.dean.trim() };
+      }
+      const updates = [
+        { key: 'active_school_year', value: activeSchoolYear.trim() as any, updated_at: new Date().toISOString(), updated_by: user?.id },
+        { key: 'dept_officers', value: officersMap as any, updated_at: new Date().toISOString(), updated_by: user?.id },
+      ];
+      const { error } = await supabase.from('system_settings').upsert(updates, { onConflict: 'key' });
+      if (error) throw error;
+      toast.success('Institutional defaults saved');
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to save institutional defaults');
+    } finally {
+      setSavingInstitutional(false);
+    }
+  };
+
+  const addOfficerRow = () =>
+    setDeptOfficers((rows) => [...rows, { department: '', chairperson: '', dean: '' }]);
+  const removeOfficerRow = (idx: number) =>
+    setDeptOfficers((rows) => rows.filter((_, i) => i !== idx));
+  const updateOfficerRow = (idx: number, field: 'department' | 'chairperson' | 'dean', value: string) =>
+    setDeptOfficers((rows) => rows.map((r, i) => (i === idx ? { ...r, [field]: value } : r)));
+
 
   const handleToggleHealthAlerts = async (checked: boolean) => {
     setHealthAlerts(checked);
