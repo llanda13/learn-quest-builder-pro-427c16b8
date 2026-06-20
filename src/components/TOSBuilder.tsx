@@ -74,6 +74,9 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
   const navigate = useNavigate();
   const location = useLocation();
   const templateApplied = useRef(false);
+  const autoFilledRef = useRef(false);
+  const { user } = useAuth();
+  const [subjectLookupStatus, setSubjectLookupStatus] = useState<'idle' | 'looking' | 'found' | 'missing'>('idle');
   
   // Hydrate topics from any saved draft so refresh / tab switch doesn't wipe input.
   const [topics, setTopics] = useState<{ topic: string; hours: number }[]>(() => {
