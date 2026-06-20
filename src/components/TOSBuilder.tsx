@@ -37,6 +37,8 @@ import {
 import { ExamFormatSelector, SelectedFormatSummary } from "@/components/generation/ExamFormatSelector";
 import { EXAM_FORMATS, getDefaultFormat, getExamFormat } from "@/types/examFormats";
 import { clearPersistedState } from "@/hooks/usePersistentState";
+import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/lib/auth";
 
 // localStorage key for the in-progress TOS draft. Bumped versions invalidate
 // older shapes so we never crash on a stale payload.
