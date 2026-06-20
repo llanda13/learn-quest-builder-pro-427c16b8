@@ -892,29 +892,35 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
               </div>
 
               <div>
-                <Label htmlFor="preparedBy">Prepared By</Label>
+                <Label htmlFor="preparedBy">Prepared By <span className="text-xs text-muted-foreground">(auto)</span></Label>
                 <Input
                   id="preparedBy"
                   {...register("prepared_by")}
-                  placeholder="e.g., Teacher Name"
+                  placeholder="Auto-filled from your profile"
+                  readOnly
+                  className="bg-muted/40"
                 />
               </div>
 
               <div>
-                <Label htmlFor="checkedBy">Checked and Reviewed By</Label>
+                <Label htmlFor="checkedBy">Checked and Reviewed By <span className="text-xs text-muted-foreground">(auto)</span></Label>
                 <Input
                   id="checkedBy"
                   {...register("checked_by")}
-                  placeholder="e.g., Program Chair Name"
+                  placeholder="Chairperson set by admin per department"
+                  readOnly
+                  className="bg-muted/40"
                 />
               </div>
 
               <div>
-                <Label htmlFor="notedBy">Noted By</Label>
+                <Label htmlFor="notedBy">Noted By <span className="text-xs text-muted-foreground">(auto)</span></Label>
                 <Input
                   id="notedBy"
                   {...register("noted_by")}
-                  placeholder="e.g., Dean Name"
+                  placeholder="Dean set by admin per department"
+                  readOnly
+                  className="bg-muted/40"
                 />
               </div>
             </div>
