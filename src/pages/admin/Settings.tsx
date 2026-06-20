@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { Switch } from '@/components/ui/switch';
-import { Shield, Eye, EyeOff, CheckCircle, XCircle, Database, Bell } from 'lucide-react';
+import { Shield, Eye, EyeOff, CheckCircle, XCircle, Database, Bell, Building2, Plus, Trash2 } from 'lucide-react';
 
 function PasswordRequirement({ met, label }: { met: boolean; label: string }) {
   return (
