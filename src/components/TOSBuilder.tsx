@@ -843,11 +843,13 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
               </div>
 
               <div>
-                <Label htmlFor="schoolYear">School Year</Label>
+                <Label htmlFor="schoolYear">School Year <span className="text-xs text-muted-foreground">(auto)</span></Label>
                 <Input
                   id="schoolYear"
                   {...register("school_year")}
-                  placeholder="e.g., 2024-2025"
+                  placeholder="Set by admin in System Settings"
+                  readOnly
+                  className="bg-muted/40"
                 />
                 {errors.school_year && (
                   <p className="text-sm text-destructive mt-1">{errors.school_year.message}</p>
