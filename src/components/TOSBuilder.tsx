@@ -37,6 +37,8 @@ import {
 import { ExamFormatSelector, SelectedFormatSummary } from "@/components/generation/ExamFormatSelector";
 import { EXAM_FORMATS, getDefaultFormat, getExamFormat } from "@/types/examFormats";
 import { clearPersistedState } from "@/hooks/usePersistentState";
+import { supabase } from "@/integrations/supabase/client";
+import { useAuth } from "@/lib/auth";
 
 // localStorage key for the in-progress TOS draft. Bumped versions invalidate
 // older shapes so we never crash on a stale payload.
@@ -72,6 +74,9 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
   const navigate = useNavigate();
   const location = useLocation();
   const templateApplied = useRef(false);
+  const autoFilledRef = useRef(false);
+  const { user } = useAuth();
+  const [subjectLookupStatus, setSubjectLookupStatus] = useState<'idle' | 'looking' | 'found' | 'missing'>('idle');
   
   // Hydrate topics from any saved draft so refresh / tab switch doesn't wipe input.
   const [topics, setTopics] = useState<{ topic: string; hours: number }[]>(() => {
@@ -241,7 +246,84 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
     }
   }, [autoGeneratePending]);
 
+  // ─── Auto-populate institutional fields from profile + system settings ───
+  // Runs once when the user is available. Only fills empty fields so we never
+  // overwrite a value already provided by a template, persisted draft, or
+  // manual edit. Centralized records keep these values consistent across TOS.
+  useEffect(() => {
+    if (!user?.id || autoFilledRef.current) return;
+    autoFilledRef.current = true;
+
+    (async () => {
+      try {
+        const [profileRes, settingsRes] = await Promise.all([
+          supabase.from('profiles').select('full_name, college').eq('id', user.id).maybeSingle(),
+          supabase.from('system_settings').select('key, value').in('key', ['active_school_year', 'dept_officers']),
+        ]);
+
+        const fullName = (profileRes.data as any)?.full_name as string | undefined;
+        const department = (profileRes.data as any)?.college as string | undefined;
+        const settingMap = new Map<string, any>((settingsRes.data ?? []).map((r: any) => [r.key, r.value]));
+        const activeSY = settingMap.get('active_school_year');
+        const officers = (settingMap.get('dept_officers') ?? {}) as Record<string, { chairperson?: string; dean?: string }>;
+        const deptOfficers = department ? officers[department] : undefined;
+
+        const apply = (field: keyof TOSFormData, value: string | undefined) => {
+          if (!value) return;
+          const current = (form.getValues(field) as string | undefined) ?? '';
+          if (!current.trim()) {
+            setValue(field, value as any, { shouldDirty: false });
+          }
+        };
+
+        apply('prepared_by', fullName);
+        apply('school_year', typeof activeSY === 'string' ? activeSY : undefined);
+        apply('checked_by', deptOfficers?.chairperson);
+        apply('noted_by', deptOfficers?.dean);
+      } catch (err) {
+        console.warn('TOS auto-fill from profile/settings failed:', err);
+      }
+    })();
+  }, [user?.id, setValue, form]);
+
+  // ─── Subject lookup: when the user enters/changes Subject No, fetch the
+  // matching subject record from the centralized Subjects database and
+  // auto-fill Subject Description + Course. Case-insensitive code match.
+  const lookupSubject = async (rawCode: string) => {
+    const code = rawCode.trim();
+    if (!code) {
+      setSubjectLookupStatus('idle');
+      return;
+    }
+    setSubjectLookupStatus('looking');
+    try {
+      const { data, error } = await supabase
+        .from('academic_subjects')
+        .select('description, specialization_id, academic_specializations(name)')
+        .ilike('code', code)
+        .eq('deleted', false)
+        .maybeSingle();
+
+      if (error || !data) {
+        setSubjectLookupStatus('missing');
+        return;
+      }
+
+      const description = (data as any).description as string | undefined;
+      const courseName = (data as any).academic_specializations?.name as string | undefined;
+
+      if (description) setValue('description', description, { shouldDirty: true, shouldValidate: true });
+      if (courseName) setValue('course', courseName, { shouldDirty: true, shouldValidate: true });
+      setSubjectLookupStatus('found');
+    } catch (err) {
+      console.warn('Subject lookup failed:', err);
+      setSubjectLookupStatus('missing');
+    }
+  };
+
   const watchedTotalItems = watch("total_items");
+
+
 
   const addTopic = () => {
     const newTopics = [...topics, { topic: "", hours: 0 }];
@@ -689,20 +771,33 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
                 <Label htmlFor="subjectNo">Subject No.</Label>
                 <Input
                   id="subjectNo"
-                  {...register("subject_no")}
+                  {...register("subject_no", {
+                    onBlur: (e) => lookupSubject(e.target.value),
+                  })}
                   placeholder="e.g., IS 9"
                 />
+                {subjectLookupStatus === 'looking' && (
+                  <p className="text-xs text-muted-foreground mt-1">Looking up subject…</p>
+                )}
+                {subjectLookupStatus === 'found' && (
+                  <p className="text-xs text-primary mt-1">Course & description auto-filled from Subjects database.</p>
+                )}
+                {subjectLookupStatus === 'missing' && (
+                  <p className="text-xs text-amber-600 mt-1">Subject not found in central database — please ask an admin to add it.</p>
+                )}
                 {errors.subject_no && (
                   <p className="text-sm text-destructive mt-1">{errors.subject_no.message}</p>
                 )}
               </div>
-              
+
               <div>
-                <Label htmlFor="course">Course</Label>
+                <Label htmlFor="course">Course <span className="text-xs text-muted-foreground">(auto)</span></Label>
                 <Input
                   id="course"
                   {...register("course")}
-                  placeholder="e.g., BSIS"
+                  placeholder="Auto-filled from Subject No."
+                  readOnly
+                  className="bg-muted/40"
                 />
                 {errors.course && (
                   <p className="text-sm text-destructive mt-1">{errors.course.message}</p>
@@ -710,11 +805,13 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
               </div>
 
               <div className="md:col-span-2">
-                <Label htmlFor="subjectDescription">Subject Description</Label>
+                <Label htmlFor="subjectDescription">Subject Description <span className="text-xs text-muted-foreground">(auto)</span></Label>
                 <Input
                   id="subjectDescription"
                   {...register("description")}
-                  placeholder="e.g., System Analysis and Design"
+                  placeholder="Auto-filled from Subject No."
+                  readOnly
+                  className="bg-muted/40"
                 />
                 {errors.description && (
                   <p className="text-sm text-destructive mt-1">{errors.description.message}</p>
@@ -746,11 +843,13 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
               </div>
 
               <div>
-                <Label htmlFor="schoolYear">School Year</Label>
+                <Label htmlFor="schoolYear">School Year <span className="text-xs text-muted-foreground">(auto)</span></Label>
                 <Input
                   id="schoolYear"
                   {...register("school_year")}
-                  placeholder="e.g., 2024-2025"
+                  placeholder="Set by admin in System Settings"
+                  readOnly
+                  className="bg-muted/40"
                 />
                 {errors.school_year && (
                   <p className="text-sm text-destructive mt-1">{errors.school_year.message}</p>
@@ -793,29 +892,35 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
               </div>
 
               <div>
-                <Label htmlFor="preparedBy">Prepared By</Label>
+                <Label htmlFor="preparedBy">Prepared By <span className="text-xs text-muted-foreground">(auto)</span></Label>
                 <Input
                   id="preparedBy"
                   {...register("prepared_by")}
-                  placeholder="e.g., Teacher Name"
+                  placeholder="Auto-filled from your profile"
+                  readOnly
+                  className="bg-muted/40"
                 />
               </div>
 
               <div>
-                <Label htmlFor="checkedBy">Checked and Reviewed By</Label>
+                <Label htmlFor="checkedBy">Checked and Reviewed By <span className="text-xs text-muted-foreground">(auto)</span></Label>
                 <Input
                   id="checkedBy"
                   {...register("checked_by")}
-                  placeholder="e.g., Program Chair Name"
+                  placeholder="Chairperson set by admin per department"
+                  readOnly
+                  className="bg-muted/40"
                 />
               </div>
 
               <div>
-                <Label htmlFor="notedBy">Noted By</Label>
+                <Label htmlFor="notedBy">Noted By <span className="text-xs text-muted-foreground">(auto)</span></Label>
                 <Input
                   id="notedBy"
                   {...register("noted_by")}
-                  placeholder="e.g., Dean Name"
+                  placeholder="Dean set by admin per department"
+                  readOnly
+                  className="bg-muted/40"
                 />
               </div>
             </div>

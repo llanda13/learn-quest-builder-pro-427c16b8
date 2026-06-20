@@ -9,7 +9,7 @@ import { Badge } from '@/components/ui/badge';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
 import { Switch } from '@/components/ui/switch';
-import { Shield, Eye, EyeOff, CheckCircle, XCircle, Database, Bell } from 'lucide-react';
+import { Shield, Eye, EyeOff, CheckCircle, XCircle, Database, Bell, Building2, Plus, Trash2 } from 'lucide-react';
 
 function PasswordRequirement({ met, label }: { met: boolean; label: string }) {
   return (
@@ -31,17 +31,34 @@ export default function Settings() {
   const [healthAlerts, setHealthAlerts] = useState(true);
   const [loadingSettings, setLoadingSettings] = useState(true);
 
+  // Institutional defaults
+  const [activeSchoolYear, setActiveSchoolYear] = useState('');
+  const [deptOfficers, setDeptOfficers] = useState<Array<{ department: string; chairperson: string; dean: string }>>([]);
+  const [savingInstitutional, setSavingInstitutional] = useState(false);
+
   // Load persisted settings on mount
   useEffect(() => {
     const loadSettings = async () => {
       try {
-        const { data, error } = await supabase
+        const { data } = await supabase
           .from('system_settings')
           .select('key, value')
-          .eq('key', 'health_alerts_enabled')
-          .single();
-        if (!error && data) {
-          setHealthAlerts(data.value === true);
+          .in('key', ['health_alerts_enabled', 'active_school_year', 'dept_officers']);
+        const map = new Map<string, any>((data ?? []).map((r: any) => [r.key, r.value]));
+        if (typeof map.get('health_alerts_enabled') === 'boolean') {
+          setHealthAlerts(map.get('health_alerts_enabled'));
+        }
+        const sy = map.get('active_school_year');
+        if (typeof sy === 'string') setActiveSchoolYear(sy);
+        const officers = map.get('dept_officers');
+        if (officers && typeof officers === 'object') {
+          setDeptOfficers(
+            Object.entries(officers as Record<string, any>).map(([department, v]) => ({
+              department,
+              chairperson: (v as any)?.chairperson ?? '',
+              dean: (v as any)?.dean ?? '',
+            }))
+          );
         }
       } catch {
         // Use default
@@ -51,6 +68,37 @@ export default function Settings() {
     };
     loadSettings();
   }, []);
+
+  const saveInstitutionalDefaults = async () => {
+    setSavingInstitutional(true);
+    try {
+      const officersMap: Record<string, { chairperson: string; dean: string }> = {};
+      for (const row of deptOfficers) {
+        const dept = row.department.trim();
+        if (!dept) continue;
+        officersMap[dept] = { chairperson: row.chairperson.trim(), dean: row.dean.trim() };
+      }
+      const updates = [
+        { key: 'active_school_year', value: activeSchoolYear.trim() as any, updated_at: new Date().toISOString(), updated_by: user?.id },
+        { key: 'dept_officers', value: officersMap as any, updated_at: new Date().toISOString(), updated_by: user?.id },
+      ];
+      const { error } = await supabase.from('system_settings').upsert(updates, { onConflict: 'key' });
+      if (error) throw error;
+      toast.success('Institutional defaults saved');
+    } catch (err: any) {
+      toast.error(err.message || 'Failed to save institutional defaults');
+    } finally {
+      setSavingInstitutional(false);
+    }
+  };
+
+  const addOfficerRow = () =>
+    setDeptOfficers((rows) => [...rows, { department: '', chairperson: '', dean: '' }]);
+  const removeOfficerRow = (idx: number) =>
+    setDeptOfficers((rows) => rows.filter((_, i) => i !== idx));
+  const updateOfficerRow = (idx: number, field: 'department' | 'chairperson' | 'dean', value: string) =>
+    setDeptOfficers((rows) => rows.map((r, i) => (i === idx ? { ...r, [field]: value } : r)));
+
 
   const handleToggleHealthAlerts = async (checked: boolean) => {
     setHealthAlerts(checked);
@@ -283,6 +331,90 @@ export default function Settings() {
               <li>Account locks after multiple failed login attempts (managed by Supabase Auth)</li>
             </ul>
           </div>
+        </CardContent>
+      </Card>
+
+      {/* Institutional Defaults */}
+      <Card>
+        <CardHeader>
+          <CardTitle className="flex items-center gap-2">
+            <Building2 className="h-5 w-5" />
+            Institutional Defaults
+          </CardTitle>
+          <CardDescription>
+            Centralized values used to auto-populate the TOS Builder so teachers never type institutional info manually.
+          </CardDescription>
+        </CardHeader>
+        <CardContent className="space-y-6">
+          <div className="space-y-2 max-w-xs">
+            <Label htmlFor="activeSchoolYear">Active School Year</Label>
+            <Input
+              id="activeSchoolYear"
+              value={activeSchoolYear}
+              onChange={(e) => setActiveSchoolYear(e.target.value)}
+              placeholder="e.g., 2025-2026"
+            />
+            <p className="text-xs text-muted-foreground">Auto-fills the School Year on every new TOS.</p>
+          </div>
+
+          <Separator />
+
+          <div className="space-y-3">
+            <div className="flex items-center justify-between">
+              <div>
+                <p className="text-sm font-medium">Department Officers</p>
+                <p className="text-xs text-muted-foreground">
+                  Maps each department to its Chairperson (Checked &amp; Reviewed By) and Dean (Noted By). The department key
+                  must match the value stored on each user's profile.
+                </p>
+              </div>
+              <Button variant="outline" size="sm" onClick={addOfficerRow}>
+                <Plus className="h-4 w-4 mr-1" /> Add
+              </Button>
+            </div>
+
+            {deptOfficers.length === 0 && (
+              <p className="text-xs text-muted-foreground italic">No departments configured yet.</p>
+            )}
+
+            <div className="space-y-2">
+              {deptOfficers.map((row, idx) => (
+                <div key={idx} className="grid grid-cols-12 gap-2 items-start">
+                  <Input
+                    className="col-span-3"
+                    placeholder="Department"
+                    value={row.department}
+                    onChange={(e) => updateOfficerRow(idx, 'department', e.target.value)}
+                  />
+                  <Input
+                    className="col-span-4"
+                    placeholder="Chairperson full name"
+                    value={row.chairperson}
+                    onChange={(e) => updateOfficerRow(idx, 'chairperson', e.target.value)}
+                  />
+                  <Input
+                    className="col-span-4"
+                    placeholder="Dean full name"
+                    value={row.dean}
+                    onChange={(e) => updateOfficerRow(idx, 'dean', e.target.value)}
+                  />
+                  <Button
+                    variant="ghost"
+                    size="icon"
+                    className="col-span-1"
+                    onClick={() => removeOfficerRow(idx)}
+                    aria-label="Remove row"
+                  >
+                    <Trash2 className="h-4 w-4" />
+                  </Button>
+                </div>
+              ))}
+            </div>
+          </div>
+
+          <Button onClick={saveInstitutionalDefaults} disabled={savingInstitutional || loadingSettings}>
+            {savingInstitutional ? 'Saving…' : 'Save Institutional Defaults'}
+          </Button>
         </CardContent>
       </Card>
 
