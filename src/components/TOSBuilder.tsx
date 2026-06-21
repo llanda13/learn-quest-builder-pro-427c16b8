@@ -355,6 +355,71 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
   };
 
   const watchedTotalItems = watch("total_items");
+  const watchedSubjectNo = watch("subject_no");
+
+  // Keep the minor-subject flag in sync with the current Subject No so the
+  // Course field becomes editable for GE / PE / NSTP regardless of how the
+  // value was loaded (persisted draft, template reuse, file upload, etc.).
+  useEffect(() => {
+    if (typeof watchedSubjectNo === 'string' && watchedSubjectNo.trim()) {
+      setIsMinorSubject(isMinorSubjectCode(watchedSubjectNo));
+    } else {
+      setIsMinorSubject(false);
+    }
+  }, [watchedSubjectNo]);
+
+  // ─── Clear / New TOS ─────────────────────────────────────────────────────
+  // Wipes the entire builder back to a fresh state without a page refresh.
+  // Re-applies the user's institutional defaults so the form is immediately ready.
+  const handleClearForm = async () => {
+    const blankTopics = [{ topic: "", hours: 0 }];
+    setTopics(blankTopics);
+    setTosMatrix(null);
+    setShowMatrix(false);
+    setSufficiencyAnalysis(null);
+    setSubjectLookupStatus('idle');
+    setIsMinorSubject(false);
+    setSelectedFormatId(getDefaultFormat().id);
+    reset({
+      subject_no: "",
+      course: "",
+      description: "",
+      year_section: "",
+      exam_period: "",
+      school_year: "",
+      semester: "",
+      total_items: 50,
+      prepared_by: "",
+      checked_by: "",
+      noted_by: "",
+      topics: blankTopics,
+    });
+    try {
+      window.localStorage.removeItem(TOS_DRAFT_KEY);
+    } catch { /* ignore */ }
+
+    if (user?.id) {
+      try {
+        const [profileRes, settingsRes] = await Promise.all([
+          supabase.from('profiles').select('full_name, college').eq('id', user.id).maybeSingle(),
+          supabase.from('system_settings').select('key, value').in('key', ['active_school_year', 'dept_officers']),
+        ]);
+        const fullName = (profileRes.data as any)?.full_name as string | undefined;
+        const department = (profileRes.data as any)?.college as string | undefined;
+        const settingMap = new Map<string, any>((settingsRes.data ?? []).map((r: any) => [r.key, r.value]));
+        const activeSY = settingMap.get('active_school_year');
+        const officers = (settingMap.get('dept_officers') ?? {}) as Record<string, { chairperson?: string; dean?: string }>;
+        const deptOfficers = department ? officers[department] : undefined;
+        if (fullName) setValue('prepared_by', fullName);
+        if (typeof activeSY === 'string') setValue('school_year', activeSY);
+        if (deptOfficers?.chairperson) setValue('checked_by', deptOfficers.chairperson);
+        if (deptOfficers?.dean) setValue('noted_by', deptOfficers.dean);
+      } catch { /* non-fatal */ }
+    }
+    toast.success('Form cleared. Ready for a new TOS.');
+  };
+
+
 
 
 
