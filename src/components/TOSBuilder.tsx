@@ -8,8 +8,28 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Trash2, Calculator, Brain, Target, AlertTriangle, Upload } from "lucide-react";
+import { Plus, Trash2, Calculator, Brain, Target, AlertTriangle, Upload, RotateCcw } from "lucide-react";
 import { TOSUploadParser } from "./tos/TOSUploadParser";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+
+// Subject prefixes considered "minor / general" — these subjects are taken across
+// multiple courses, so the Course field must remain manually editable instead of
+// being auto-filled from the Subjects database.
+const MINOR_SUBJECT_PREFIXES = ['GE', 'PE', 'NSTP'];
+const isMinorSubjectCode = (code: string) => {
+  const prefix = code.trim().toUpperCase().split(/\s+/)[0] ?? '';
+  return MINOR_SUBJECT_PREFIXES.includes(prefix);
+};
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
@@ -77,6 +97,8 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
   const autoFilledRef = useRef(false);
   const { user } = useAuth();
   const [subjectLookupStatus, setSubjectLookupStatus] = useState<'idle' | 'looking' | 'found' | 'missing'>('idle');
+  const [isMinorSubject, setIsMinorSubject] = useState(false);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
   
   // Hydrate topics from any saved draft so refresh / tab switch doesn't wipe input.
   const [topics, setTopics] = useState<{ topic: string; hours: number }[]>(() => {
@@ -293,8 +315,11 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
     const code = rawCode.trim();
     if (!code) {
       setSubjectLookupStatus('idle');
+      setIsMinorSubject(false);
       return;
     }
+    const minor = isMinorSubjectCode(code);
+    setIsMinorSubject(minor);
     setSubjectLookupStatus('looking');
     try {
       const { data, error } = await supabase
@@ -313,7 +338,15 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
       const courseName = (data as any).academic_specializations?.name as string | undefined;
 
       if (description) setValue('description', description, { shouldDirty: true, shouldValidate: true });
-      if (courseName) setValue('course', courseName, { shouldDirty: true, shouldValidate: true });
+      // Only auto-fill Course for MAJOR subjects. Minor/general subjects (GE, PE,
+      // NSTP) are taken across courses, so the teacher selects the Course manually.
+      if (!minor && courseName) {
+        setValue('course', courseName, { shouldDirty: true, shouldValidate: true });
+      } else if (minor) {
+        // Clear any stale auto-filled value so the teacher's manual input is preserved.
+        const current = (form.getValues('course') as string | undefined) ?? '';
+        if (current === courseName) setValue('course', '', { shouldDirty: true });
+      }
       setSubjectLookupStatus('found');
     } catch (err) {
       console.warn('Subject lookup failed:', err);
@@ -322,6 +355,71 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
   };
 
   const watchedTotalItems = watch("total_items");
+  const watchedSubjectNo = watch("subject_no");
+
+  // Keep the minor-subject flag in sync with the current Subject No so the
+  // Course field becomes editable for GE / PE / NSTP regardless of how the
+  // value was loaded (persisted draft, template reuse, file upload, etc.).
+  useEffect(() => {
+    if (typeof watchedSubjectNo === 'string' && watchedSubjectNo.trim()) {
+      setIsMinorSubject(isMinorSubjectCode(watchedSubjectNo));
+    } else {
+      setIsMinorSubject(false);
+    }
+  }, [watchedSubjectNo]);
+
+  // ─── Clear / New TOS ─────────────────────────────────────────────────────
+  // Wipes the entire builder back to a fresh state without a page refresh.
+  // Re-applies the user's institutional defaults so the form is immediately ready.
+  const handleClearForm = async () => {
+    const blankTopics = [{ topic: "", hours: 0 }];
+    setTopics(blankTopics);
+    setTosMatrix(null);
+    setShowMatrix(false);
+    setSufficiencyAnalysis(null);
+    setSubjectLookupStatus('idle');
+    setIsMinorSubject(false);
+    setSelectedFormatId(getDefaultFormat().id);
+    reset({
+      subject_no: "",
+      course: "",
+      description: "",
+      year_section: "",
+      exam_period: "",
+      school_year: "",
+      semester: "",
+      total_items: 50,
+      prepared_by: "",
+      checked_by: "",
+      noted_by: "",
+      topics: blankTopics,
+    });
+    try {
+      window.localStorage.removeItem(TOS_DRAFT_KEY);
+    } catch { /* ignore */ }
+
+    if (user?.id) {
+      try {
+        const [profileRes, settingsRes] = await Promise.all([
+          supabase.from('profiles').select('full_name, college').eq('id', user.id).maybeSingle(),
+          supabase.from('system_settings').select('key, value').in('key', ['active_school_year', 'dept_officers']),
+        ]);
+        const fullName = (profileRes.data as any)?.full_name as string | undefined;
+        const department = (profileRes.data as any)?.college as string | undefined;
+        const settingMap = new Map<string, any>((settingsRes.data ?? []).map((r: any) => [r.key, r.value]));
+        const activeSY = settingMap.get('active_school_year');
+        const officers = (settingMap.get('dept_officers') ?? {}) as Record<string, { chairperson?: string; dean?: string }>;
+        const deptOfficers = department ? officers[department] : undefined;
+        if (fullName) setValue('prepared_by', fullName);
+        if (typeof activeSY === 'string') setValue('school_year', activeSY);
+        if (deptOfficers?.chairperson) setValue('checked_by', deptOfficers.chairperson);
+        if (deptOfficers?.dean) setValue('noted_by', deptOfficers.dean);
+      } catch { /* non-fatal */ }
+    }
+    toast.success('Form cleared. Ready for a new TOS.');
+  };
+
+
 
 
 
@@ -712,11 +810,38 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
   return (
     <div className="max-w-4xl mx-auto p-6 space-y-6">
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4 gap-2">
           <CardTitle className="flex items-center gap-2 text-academic-primary">
               <Calculator className="h-5 w-5" />
               Table of Specification Builder
           </CardTitle>
+          <div className="flex items-center gap-2">
+            <AlertDialog open={showClearConfirm} onOpenChange={setShowClearConfirm}>
+              <AlertDialogTrigger asChild>
+                <Button type="button" variant="outline" size="sm">
+                  <RotateCcw className="h-4 w-4 mr-2" />
+                  New TOS
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Clear the current TOS form?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Are you sure you want to clear the current TOS form? All unsaved data —
+                    including added topics, instructional hours, and any generated matrix
+                    preview — will be removed. Auto-populated fields will be restored.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction onClick={() => handleClearForm()}>
+                    Clear Form
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+
+
           <TOSUploadParser onParsed={(data) => {
             const parsedTopics = data.topics.length > 0 ? data.topics : [{ topic: "", hours: 0 }];
             setTopics(parsedTopics);
@@ -762,7 +887,9 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
               setAutoGeneratePending(true);
             }
           }} />
+          </div>
         </CardHeader>
+
         <CardContent>
           <form onSubmit={handleSubmit(onSubmit)} className="space-y-6">
             {/* Basic Information */}
@@ -791,18 +918,29 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
               </div>
 
               <div>
-                <Label htmlFor="course">Course <span className="text-xs text-muted-foreground">(auto)</span></Label>
+                <Label htmlFor="course">
+                  Course{' '}
+                  <span className="text-xs text-muted-foreground">
+                    {isMinorSubject ? '(manual — minor/general subject)' : '(auto)'}
+                  </span>
+                </Label>
                 <Input
                   id="course"
                   {...register("course")}
-                  placeholder="Auto-filled from Subject No."
-                  readOnly
-                  className="bg-muted/40"
+                  placeholder={isMinorSubject ? 'Enter course (e.g., BSIS, BSIT)' : 'Auto-filled from Subject No.'}
+                  readOnly={!isMinorSubject}
+                  className={isMinorSubject ? '' : 'bg-muted/40'}
                 />
+                {isMinorSubject && (
+                  <p className="text-xs text-muted-foreground mt-1">
+                    GE / PE / NSTP subjects are taken across courses — please select the course manually.
+                  </p>
+                )}
                 {errors.course && (
                   <p className="text-sm text-destructive mt-1">{errors.course.message}</p>
                 )}
               </div>
+
 
               <div className="md:col-span-2">
                 <Label htmlFor="subjectDescription">Subject Description <span className="text-xs text-muted-foreground">(auto)</span></Label>
