@@ -840,9 +840,7 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
                 </AlertDialogFooter>
               </AlertDialogContent>
             </AlertDialog>
-          </div>
-        </CardHeader>
-        <CardHeader className="pt-0 pb-4 flex flex-row justify-end">
+
 
           <TOSUploadParser onParsed={(data) => {
             const parsedTopics = data.topics.length > 0 ? data.topics : [{ topic: "", hours: 0 }];
