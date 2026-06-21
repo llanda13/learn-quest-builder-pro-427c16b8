@@ -810,11 +810,40 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
   return (
     <div className="max-w-4xl mx-auto p-6 space-y-6">
       <Card>
-        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4">
+        <CardHeader className="flex flex-row items-center justify-between space-y-0 pb-4 gap-2">
           <CardTitle className="flex items-center gap-2 text-academic-primary">
               <Calculator className="h-5 w-5" />
               Table of Specification Builder
           </CardTitle>
+          <div className="flex items-center gap-2">
+            <AlertDialog open={showClearConfirm} onOpenChange={setShowClearConfirm}>
+              <AlertDialogTrigger asChild>
+                <Button type="button" variant="outline" size="sm">
+                  <RotateCcw className="h-4 w-4 mr-2" />
+                  New TOS
+                </Button>
+              </AlertDialogTrigger>
+              <AlertDialogContent>
+                <AlertDialogHeader>
+                  <AlertDialogTitle>Clear the current TOS form?</AlertDialogTitle>
+                  <AlertDialogDescription>
+                    Are you sure you want to clear the current TOS form? All unsaved data —
+                    including added topics, instructional hours, and any generated matrix
+                    preview — will be removed. Auto-populated fields will be restored.
+                  </AlertDialogDescription>
+                </AlertDialogHeader>
+                <AlertDialogFooter>
+                  <AlertDialogCancel>Cancel</AlertDialogCancel>
+                  <AlertDialogAction onClick={() => handleClearForm()}>
+                    Clear Form
+                  </AlertDialogAction>
+                </AlertDialogFooter>
+              </AlertDialogContent>
+            </AlertDialog>
+          </div>
+        </CardHeader>
+        <CardHeader className="pt-0 pb-4 flex flex-row justify-end">
+
           <TOSUploadParser onParsed={(data) => {
             const parsedTopics = data.topics.length > 0 ? data.topics : [{ topic: "", hours: 0 }];
             setTopics(parsedTopics);
