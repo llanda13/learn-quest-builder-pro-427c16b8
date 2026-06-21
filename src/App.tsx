@@ -17,8 +17,6 @@ import AdminAnalytics from "./pages/admin/Analytics";
 import RecentlyDeleted from "./pages/admin/RecentlyDeleted";
 import AdminSettings from "./pages/admin/Settings";
 import AILogs from "./pages/admin/AILogs";
-import RotationSettingsPage from "./pages/admin/RotationSettings";
-import RotationAudit from "./pages/admin/RotationAudit";
 import TOSPage from "./pages/teacher/TOSPage";
 
 import MyTests from "./pages/teacher/MyTests";
@@ -96,8 +94,6 @@ const App = () => {
                         <Route path="test-assembly" element={<TestAssembly />} />
                         <Route path="tests" element={<Tests />} />
                         <Route path="collaboration" element={<Collaboration />} />
-                        <Route path="rotation" element={<RotationSettingsPage />} />
-                        <Route path="rotation-audit" element={<RotationAudit />} />
                         <Route path="settings" element={<AdminSettings />} />
                       </Routes>
                     </AdminLayout>
