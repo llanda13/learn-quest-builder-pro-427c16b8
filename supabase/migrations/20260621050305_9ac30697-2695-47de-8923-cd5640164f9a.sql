@@ -1,0 +1,2 @@
+DROP POLICY IF EXISTS academic_topics_insert_authenticated ON public.academic_topics;
+CREATE POLICY academic_topics_insert_admin ON public.academic_topics FOR INSERT TO authenticated WITH CHECK (public.is_admin(auth.uid()));
