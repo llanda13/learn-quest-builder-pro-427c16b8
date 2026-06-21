@@ -315,8 +315,11 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
     const code = rawCode.trim();
     if (!code) {
       setSubjectLookupStatus('idle');
+      setIsMinorSubject(false);
       return;
     }
+    const minor = isMinorSubjectCode(code);
+    setIsMinorSubject(minor);
     setSubjectLookupStatus('looking');
     try {
       const { data, error } = await supabase
@@ -335,7 +338,15 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
       const courseName = (data as any).academic_specializations?.name as string | undefined;
 
       if (description) setValue('description', description, { shouldDirty: true, shouldValidate: true });
-      if (courseName) setValue('course', courseName, { shouldDirty: true, shouldValidate: true });
+      // Only auto-fill Course for MAJOR subjects. Minor/general subjects (GE, PE,
+      // NSTP) are taken across courses, so the teacher selects the Course manually.
+      if (!minor && courseName) {
+        setValue('course', courseName, { shouldDirty: true, shouldValidate: true });
+      } else if (minor) {
+        // Clear any stale auto-filled value so the teacher's manual input is preserved.
+        const current = (form.getValues('course') as string | undefined) ?? '';
+        if (current === courseName) setValue('course', '', { shouldDirty: true });
+      }
       setSubjectLookupStatus('found');
     } catch (err) {
       console.warn('Subject lookup failed:', err);
