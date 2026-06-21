@@ -8,8 +8,28 @@ import { Input } from "@/components/ui/input";
 import { Label } from "@/components/ui/label";
 import { Separator } from "@/components/ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
-import { Plus, Trash2, Calculator, Brain, Target, AlertTriangle, Upload } from "lucide-react";
+import { Plus, Trash2, Calculator, Brain, Target, AlertTriangle, Upload, RotateCcw } from "lucide-react";
 import { TOSUploadParser } from "./tos/TOSUploadParser";
+import {
+  AlertDialog,
+  AlertDialogAction,
+  AlertDialogCancel,
+  AlertDialogContent,
+  AlertDialogDescription,
+  AlertDialogFooter,
+  AlertDialogHeader,
+  AlertDialogTitle,
+  AlertDialogTrigger,
+} from "@/components/ui/alert-dialog";
+
+// Subject prefixes considered "minor / general" — these subjects are taken across
+// multiple courses, so the Course field must remain manually editable instead of
+// being auto-filled from the Subjects database.
+const MINOR_SUBJECT_PREFIXES = ['GE', 'PE', 'NSTP'];
+const isMinorSubjectCode = (code: string) => {
+  const prefix = code.trim().toUpperCase().split(/\s+/)[0] ?? '';
+  return MINOR_SUBJECT_PREFIXES.includes(prefix);
+};
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Progress } from "@/components/ui/progress";
 import { toast } from "sonner";
