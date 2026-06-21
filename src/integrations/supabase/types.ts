@@ -2342,8 +2342,6 @@ export type Database = {
           topic_name: string
         }[]
       }
-      show_limit: { Args: never; Returns: number }
-      show_trgm: { Args: { "": string }; Returns: string[] }
       validate_tos_exists: { Args: { p_tos_id: string }; Returns: boolean }
       validate_version_balance: {
         Args: { p_parent_test_id: string }
