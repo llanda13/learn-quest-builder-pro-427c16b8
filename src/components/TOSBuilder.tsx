@@ -97,6 +97,8 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
   const autoFilledRef = useRef(false);
   const { user } = useAuth();
   const [subjectLookupStatus, setSubjectLookupStatus] = useState<'idle' | 'looking' | 'found' | 'missing'>('idle');
+  const [isMinorSubject, setIsMinorSubject] = useState(false);
+  const [showClearConfirm, setShowClearConfirm] = useState(false);
   
   // Hydrate topics from any saved draft so refresh / tab switch doesn't wipe input.
   const [topics, setTopics] = useState<{ topic: string; hours: number }[]>(() => {
