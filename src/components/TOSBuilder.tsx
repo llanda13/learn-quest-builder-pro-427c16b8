@@ -287,8 +287,9 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
         const department = (profileRes.data as any)?.college as string | undefined;
         const settingMap = new Map<string, any>((settingsRes.data ?? []).map((r: any) => [r.key, r.value]));
         const activeSY = settingMap.get('active_school_year');
-        const officers = (settingMap.get('dept_officers') ?? {}) as Record<string, { chairperson?: string; dean?: string }>;
-        const deptOfficers = department ? officers[department] : undefined;
+        const officers = (settingMap.get('dept_officers') ?? {}) as Record<string, { chairperson?: string; dean?: string; status?: string }>;
+        const rawDept = department ? officers[department] : undefined;
+        const deptOfficers = rawDept && (rawDept.status ?? 'active') !== 'inactive' ? rawDept : undefined;
 
         const apply = (field: keyof TOSFormData, value: string | undefined) => {
           if (!value) return;
@@ -420,8 +421,9 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
         const department = (profileRes.data as any)?.college as string | undefined;
         const settingMap = new Map<string, any>((settingsRes.data ?? []).map((r: any) => [r.key, r.value]));
         const activeSY = settingMap.get('active_school_year');
-        const officers = (settingMap.get('dept_officers') ?? {}) as Record<string, { chairperson?: string; dean?: string }>;
-        const deptOfficers = department ? officers[department] : undefined;
+        const officers = (settingMap.get('dept_officers') ?? {}) as Record<string, { chairperson?: string; dean?: string; status?: string }>;
+        const rawDept = department ? officers[department] : undefined;
+        const deptOfficers = rawDept && (rawDept.status ?? 'active') !== 'inactive' ? rawDept : undefined;
         if (fullName) setValue('prepared_by', fullName);
         if (typeof activeSY === 'string') setValue('school_year', activeSY);
         if (deptOfficers?.chairperson) setValue('checked_by', deptOfficers.chairperson);
@@ -982,11 +984,18 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
 
               <div>
                 <Label htmlFor="examPeriod">Exam Period</Label>
-                <Input
-                  id="examPeriod"
-                  {...register("exam_period")}
-                  placeholder="e.g., Final Examination"
-                />
+                <Select
+                  value={watch("exam_period") || ""}
+                  onValueChange={(v) => setValue("exam_period", v, { shouldValidate: true, shouldDirty: true })}
+                >
+                  <SelectTrigger id="examPeriod">
+                    <SelectValue placeholder="Select exam period" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Midterm Examination">Midterm Examination</SelectItem>
+                    <SelectItem value="Final Examination">Final Examination</SelectItem>
+                  </SelectContent>
+                </Select>
                 {errors.exam_period && (
                   <p className="text-sm text-destructive mt-1">{errors.exam_period.message}</p>
                 )}

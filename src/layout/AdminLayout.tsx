@@ -12,6 +12,7 @@ import {
   ChevronRight,
   Brain,
   Upload,
+  Building2,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -47,6 +48,12 @@ const adminMenuItems = [
     href: "/admin/ai-assistant", 
     icon: Brain,
     description: "Academic AI helper" 
+  },
+  { 
+    title: "Department Officers", 
+    href: "/admin/department-officers", 
+    icon: Building2,
+    description: "Chairperson & Dean per dept" 
   },
   { 
     title: "Recently Deleted", 

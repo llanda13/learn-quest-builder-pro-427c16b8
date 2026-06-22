@@ -16,6 +16,7 @@ import UserManagement from "./pages/admin/UserManagement";
 import AdminAnalytics from "./pages/admin/Analytics";
 import RecentlyDeleted from "./pages/admin/RecentlyDeleted";
 import AdminSettings from "./pages/admin/Settings";
+import DepartmentOfficers from "./pages/admin/DepartmentOfficers";
 import AILogs from "./pages/admin/AILogs";
 import TOSPage from "./pages/teacher/TOSPage";
 
@@ -94,6 +95,7 @@ const App = () => {
                         <Route path="test-assembly" element={<TestAssembly />} />
                         <Route path="tests" element={<Tests />} />
                         <Route path="collaboration" element={<Collaboration />} />
+                        <Route path="department-officers" element={<DepartmentOfficers />} />
                         <Route path="settings" element={<AdminSettings />} />
                       </Routes>
                     </AdminLayout>
