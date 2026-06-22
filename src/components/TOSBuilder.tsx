@@ -335,7 +335,18 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
       }
 
       const description = (data as any).description as string | undefined;
-      const courseName = (data as any).academic_specializations?.name as string | undefined;
+      const specName = (data as any).academic_specializations?.name as string | undefined;
+      // Map specialization code (e.g., "IT", "IS", "EMC", "CS") to the full
+      // program/course code (e.g., "BSIT", "BSIS"). If the specialization name
+      // is already a full program code (starts with "BS"), use it as-is.
+      const toProgramCode = (s?: string): string | undefined => {
+        if (!s) return undefined;
+        const trimmed = s.trim();
+        if (!trimmed) return undefined;
+        if (/^BS/i.test(trimmed)) return trimmed.toUpperCase();
+        return `BS${trimmed.toUpperCase()}`;
+      };
+      const courseName = toProgramCode(specName);
 
       if (description) setValue('description', description, { shouldDirty: true, shouldValidate: true });
       // Only auto-fill Course for MAJOR subjects. Minor/general subjects (GE, PE,
@@ -347,6 +358,7 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
         const current = (form.getValues('course') as string | undefined) ?? '';
         if (current === courseName) setValue('course', '', { shouldDirty: true });
       }
+
       setSubjectLookupStatus('found');
     } catch (err) {
       console.warn('Subject lookup failed:', err);
