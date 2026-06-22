@@ -50,6 +50,18 @@ const adminMenuItems = [
     description: "Academic AI helper" 
   },
   { 
+    title: "Department Officers", 
+    href: "/admin/department-officers", 
+    icon: Building2,
+    description: "Chairperson & Dean per dept" 
+  },
+  { 
+    title: "AI Assistant", 
+    href: "/admin/ai-assistant", 
+    icon: Brain,
+    description: "Academic AI helper" 
+  },
+  { 
     title: "Recently Deleted", 
     href: "/admin/recently-deleted", 
     icon: Archive,
