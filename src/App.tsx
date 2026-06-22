@@ -95,6 +95,7 @@ const App = () => {
                         <Route path="test-assembly" element={<TestAssembly />} />
                         <Route path="tests" element={<Tests />} />
                         <Route path="collaboration" element={<Collaboration />} />
+                        <Route path="department-officers" element={<DepartmentOfficers />} />
                         <Route path="settings" element={<AdminSettings />} />
                       </Routes>
                     </AdminLayout>
