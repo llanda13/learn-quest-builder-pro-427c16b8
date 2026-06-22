@@ -16,6 +16,7 @@ import UserManagement from "./pages/admin/UserManagement";
 import AdminAnalytics from "./pages/admin/Analytics";
 import RecentlyDeleted from "./pages/admin/RecentlyDeleted";
 import AdminSettings from "./pages/admin/Settings";
+import DepartmentOfficers from "./pages/admin/DepartmentOfficers";
 import AILogs from "./pages/admin/AILogs";
 import TOSPage from "./pages/teacher/TOSPage";
 
