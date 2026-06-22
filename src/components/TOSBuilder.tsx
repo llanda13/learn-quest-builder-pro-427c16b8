@@ -982,11 +982,18 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
 
               <div>
                 <Label htmlFor="examPeriod">Exam Period</Label>
-                <Input
-                  id="examPeriod"
-                  {...register("exam_period")}
-                  placeholder="e.g., Final Examination"
-                />
+                <Select
+                  value={watch("exam_period") || ""}
+                  onValueChange={(v) => setValue("exam_period", v, { shouldValidate: true, shouldDirty: true })}
+                >
+                  <SelectTrigger id="examPeriod">
+                    <SelectValue placeholder="Select exam period" />
+                  </SelectTrigger>
+                  <SelectContent>
+                    <SelectItem value="Midterm Examination">Midterm Examination</SelectItem>
+                    <SelectItem value="Final Examination">Final Examination</SelectItem>
+                  </SelectContent>
+                </Select>
                 {errors.exam_period && (
                   <p className="text-sm text-destructive mt-1">{errors.exam_period.message}</p>
                 )}
