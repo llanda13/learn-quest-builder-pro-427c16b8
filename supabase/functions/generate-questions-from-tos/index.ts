@@ -1477,13 +1477,17 @@ async function generateMCQQuestions(
   
   const questionsSpec = intents.map((intent, idx) => `
 Question ${idx + 1}:
+  ASSIGNED TOPIC (MANDATORY ANCHOR): "${topic}"
   FOCUS CONCEPT: "${intent.concept}"
   REQUIRED COGNITIVE OPERATION: "${intent.operation}"
   COGNITIVE REQUIREMENT: ${bloomConfig.requirement}
   DIFFICULTY: "${intent.difficulty}"
-  
-  The question MUST require students to actually ${intent.operation} - not just recall or describe.
-  The correct answer must demonstrate ${intent.operation} was performed, not just pattern matching.
+
+  RULES FOR THIS ITEM:
+  • The stem AND every option MUST be about "${topic}" — never generic "systems", "frameworks", or "methodologies" content.
+  • The correct answer must demonstrate ${intent.operation} on "${topic}" specifically.
+  • Do NOT reuse boilerplate sentence structures from previous items in this batch.
+  • Reject any generic educational template — every item must be topic-specific and academically substantive.
 `).join('\n');
 
   const usedTexts = registry.usedQuestionTexts.slice(-15).map(t => t.substring(0, 120));
