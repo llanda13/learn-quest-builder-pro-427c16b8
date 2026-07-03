@@ -1477,13 +1477,17 @@ async function generateMCQQuestions(
   
   const questionsSpec = intents.map((intent, idx) => `
 Question ${idx + 1}:
+  ASSIGNED TOPIC (MANDATORY ANCHOR): "${topic}"
   FOCUS CONCEPT: "${intent.concept}"
   REQUIRED COGNITIVE OPERATION: "${intent.operation}"
   COGNITIVE REQUIREMENT: ${bloomConfig.requirement}
   DIFFICULTY: "${intent.difficulty}"
-  
-  The question MUST require students to actually ${intent.operation} - not just recall or describe.
-  The correct answer must demonstrate ${intent.operation} was performed, not just pattern matching.
+
+  RULES FOR THIS ITEM:
+  • The stem AND every option MUST be about "${topic}" — never generic "systems", "frameworks", or "methodologies" content.
+  • The correct answer must demonstrate ${intent.operation} on "${topic}" specifically.
+  • Do NOT reuse boilerplate sentence structures from previous items in this batch.
+  • Reject any generic educational template — every item must be topic-specific and academically substantive.
 `).join('\n');
 
   const usedTexts = registry.usedQuestionTexts.slice(-15).map(t => t.substring(0, 120));
@@ -1773,7 +1777,46 @@ CRITICAL RULES:
         used_fallback: hasPlaceholder
       }
     };
-  }).filter((q: any) => q !== null && q.question_text && q.question_text.length > 10);
+  }).filter((q: any) => {
+    if (!q || !q.question_text || q.question_text.length <= 10) return false;
+
+    // ---- Topic anchoring: stem OR at least two options must reference the topic. ----
+    const topicTokens = String(topic)
+      .toLowerCase()
+      .split(/[^a-z0-9]+/i)
+      .filter((t: string) => t.length >= 4);
+    const mentionsTopic = (s: string): boolean => {
+      const low = String(s || '').toLowerCase();
+      if (!topicTokens.length) return true;
+      return topicTokens.some((tok: string) => low.includes(tok));
+    };
+    const stemOnTopic = mentionsTopic(q.question_text);
+    const optionsOnTopic = Object.values(q.choices || {}).filter((c: any) =>
+      mentionsTopic(String(c))
+    ).length;
+    if (!stemOnTopic && optionsOnTopic < 2) {
+      console.warn(`🚫 Rejected off-topic MCQ (topic="${topic}"): ${String(q.question_text).slice(0, 80)}`);
+      return false;
+    }
+
+    // ---- Template-decay detection: repeated boilerplate phrasing. ----
+    const decayPhrases = [
+      /systematic methodology establishing foundational principles/i,
+      /structured framework enabling systematic analysis/i,
+      /apply established principles systematically/i,
+      /interdependencies create feedback loops/i,
+      /balanced approach integrating multiple perspectives/i,
+      /modular architecture with clearly defined interfaces/i,
+      /generic (educational|academic) (template|framework)/i,
+    ];
+    const stemAndOpts = [q.question_text, ...Object.values(q.choices || {})].join(' ');
+    if (decayPhrases.some((rx) => rx.test(stemAndOpts))) {
+      console.warn(`🚫 Rejected template-decay MCQ: ${String(q.question_text).slice(0, 80)}`);
+      return false;
+    }
+
+    return true;
+  });
 }
 
 /**
