@@ -240,7 +240,9 @@ export function shuffleExamChoices(items: any[]): ShuffleResult {
       c[L] = (c[L] || 0) + 1;
     }
     const uniq = Math.max(1, Object.keys(c).length);
-    const cap = Math.max(3, Math.ceil((mcqs.length / uniq) * 1.4));
+    // Stricter cluster detection: allow only a small overshoot above fair share
+    // so the deterministic rebalancer is invoked whenever letters skew.
+    const cap = Math.max(3, Math.ceil(mcqs.length / uniq) + 1);
     return Object.values(c).some((v) => v > cap);
   };
 
