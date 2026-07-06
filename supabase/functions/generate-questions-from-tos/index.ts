@@ -1602,20 +1602,23 @@ Return ONLY valid JSON with COMPLETE content:
       messages: [
         {
           role: 'system',
-          content: `You are an expert educational assessment designer creating questions for university-level examinations. 
+          content: `You are an expert educational assessment designer authoring university-level exam items on the SPECIFIC ASSIGNED TOPIC: "${topic}".
 
-CRITICAL RULES:
-1. Generate COMPLETE, SPECIFIC content - never use placeholders or generic text
-2. Each answer option must be a real, substantive response (not "Correct answer about X" or "Distractor for X")
-3. Questions must test actual knowledge, not just pattern recognition
-4. For higher Bloom's levels, use scenarios and application-based questions
-5. All options should be plausible to someone with partial knowledge
-6. Return the correct answer separately from distractors so they can be randomized`
+ABSOLUTE RULES:
+1. Every stem, correct option, and distractor MUST reference concrete facts, names, dates, events, or concepts from "${topic}". Nothing generic.
+2. NEVER use corporate/managerial boilerplate such as: "systematic methodology", "foundational principles", "structured framework", "systematic analysis", "apply established principles systematically", "balanced approach integrating multiple perspectives", "modular architecture", "speed of implementation over quality", "consistent implementation and reliable outcomes", "align objectives with implementation". These phrases will cause automatic rejection.
+3. NEVER recycle stems or option structures across items — each item must sound like a different subject-matter expert wrote it, using topic-specific vocabulary.
+4. For Applying/Analyzing/Evaluating/Creating, open each stem with a concrete scenario grounded in "${topic}" (a case, source excerpt, historical event, dataset, or named situation).
+5. Return the correct answer separately from distractors so the caller can randomize letter positions.
+6. Output SUBSTANTIVE content only — no placeholders, no meta-descriptions.`
         },
         { role: 'user', content: prompt }
       ],
 
-      temperature: 0.6,
+      temperature: 0.85,
+      top_p: 0.9,
+      frequency_penalty: 0.6,
+      presence_penalty: 0.4,
       max_tokens: 4000
     }),
   });
@@ -1720,38 +1723,37 @@ CRITICAL RULES:
     // Check if any content is placeholder
     const allContent = [correctOption, ...distractors].join(' ');
     const hasPlaceholder = placeholderPatterns.some(pattern => pattern.test(allContent));
-    
-    // If placeholder detected, use fallback content
+
+    // If placeholder or missing content, DROP the item so the refill loop
+    // can regenerate it with fresh, topic-anchored content. Substituting
+    // generic fallbacks is exactly what caused "template decay" across items.
     if (hasPlaceholder || !correctOption || distractors.length < 3) {
-      console.warn(`⚠️ Placeholder detected, using fallback content for: ${q.text?.substring(0, 50)}...`);
-      const fallback = fallbackContent[bloom] || fallbackContent['Understanding'];
-      correctOption = fallback.correct;
-      distractors = fallback.distractors;
+      console.warn(`🚫 Dropping placeholder MCQ (will be refilled): ${q.text?.substring(0, 60)}`);
+      return null;
     }
-    
-    // Validate minimum content length
-    const hasSubstantiveContent = correctOption.length >= 20 && 
+
+    // Validate minimum content length — again, drop instead of substituting.
+    const hasSubstantiveContent = correctOption.length >= 20 &&
       distractors.every((d: string) => d && d.length >= 20);
-    
+
     if (!hasSubstantiveContent) {
-      console.warn(`⚠️ Content too short, using fallback for: ${q.text?.substring(0, 50)}...`);
-      const fallback = fallbackContent[bloom] || fallbackContent['Understanding'];
-      correctOption = fallback.correct;
-      distractors = fallback.distractors;
+      console.warn(`🚫 Dropping short-content MCQ (will be refilled): ${q.text?.substring(0, 60)}`);
+      return null;
     }
-    
+
     // Randomize the answer position
     const { choices, correctAnswer } = randomizeAnswerPosition(correctOption, distractors);
-    
+
     // Final validation - choices must be substantive
     const finalChoicesValid = Object.values(choices).every(
       (c: string) => c && c.length >= 20 && !placeholderPatterns.some(p => p.test(c))
     );
-    
+
     if (!finalChoicesValid) {
       console.error(`❌ Failed to generate valid content for MCQ, skipping`);
       return null;
     }
+
     
     return {
       id: generateUUID(),
@@ -1767,14 +1769,14 @@ CRITICAL RULES:
       points: POINTS.mcq,
       created_by: 'ai',
       approved: true,
-      ai_confidence_score: hasPlaceholder ? 0.7 : 0.85,
-      needs_review: hasPlaceholder,
+      ai_confidence_score: 0.85,
+      needs_review: false,
       metadata: {
         generated_by: 'intent_driven_pipeline',
-        pipeline_version: '3.0',
+        pipeline_version: '3.1',
         question_type: 'mcq',
         answer_randomized: true,
-        used_fallback: hasPlaceholder
+        used_fallback: false
       }
     };
   }).filter((q: any) => {
