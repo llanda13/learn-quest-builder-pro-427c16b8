@@ -1769,14 +1769,14 @@ ABSOLUTE RULES:
       points: POINTS.mcq,
       created_by: 'ai',
       approved: true,
-      ai_confidence_score: hasPlaceholder ? 0.7 : 0.85,
-      needs_review: hasPlaceholder,
+      ai_confidence_score: 0.85,
+      needs_review: false,
       metadata: {
         generated_by: 'intent_driven_pipeline',
-        pipeline_version: '3.0',
+        pipeline_version: '3.1',
         question_type: 'mcq',
         answer_randomized: true,
-        used_fallback: hasPlaceholder
+        used_fallback: false
       }
     };
   }).filter((q: any) => {
