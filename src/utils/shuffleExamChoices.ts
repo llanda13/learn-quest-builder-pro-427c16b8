@@ -188,7 +188,8 @@ function rebalance(preps: Prepared[]): void {
     Math.max(...mcqs.map((p) => p.entries.length)),
   );
   const letters = LETTERS.slice(0, optionCount);
-  const fairCap = Math.ceil(n / optionCount) + 1; // +1 slack for realism
+  // Strict fair share: no letter may exceed ceil(n / optionCount).
+  const fairCap = Math.ceil(n / optionCount);
 
   const count = (): Record<string, number> => {
     const c: Record<string, number> = {};
