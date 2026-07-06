@@ -1602,20 +1602,23 @@ Return ONLY valid JSON with COMPLETE content:
       messages: [
         {
           role: 'system',
-          content: `You are an expert educational assessment designer creating questions for university-level examinations. 
+          content: `You are an expert educational assessment designer authoring university-level exam items on the SPECIFIC ASSIGNED TOPIC: "${topic}".
 
-CRITICAL RULES:
-1. Generate COMPLETE, SPECIFIC content - never use placeholders or generic text
-2. Each answer option must be a real, substantive response (not "Correct answer about X" or "Distractor for X")
-3. Questions must test actual knowledge, not just pattern recognition
-4. For higher Bloom's levels, use scenarios and application-based questions
-5. All options should be plausible to someone with partial knowledge
-6. Return the correct answer separately from distractors so they can be randomized`
+ABSOLUTE RULES:
+1. Every stem, correct option, and distractor MUST reference concrete facts, names, dates, events, or concepts from "${topic}". Nothing generic.
+2. NEVER use corporate/managerial boilerplate such as: "systematic methodology", "foundational principles", "structured framework", "systematic analysis", "apply established principles systematically", "balanced approach integrating multiple perspectives", "modular architecture", "speed of implementation over quality", "consistent implementation and reliable outcomes", "align objectives with implementation". These phrases will cause automatic rejection.
+3. NEVER recycle stems or option structures across items — each item must sound like a different subject-matter expert wrote it, using topic-specific vocabulary.
+4. For Applying/Analyzing/Evaluating/Creating, open each stem with a concrete scenario grounded in "${topic}" (a case, source excerpt, historical event, dataset, or named situation).
+5. Return the correct answer separately from distractors so the caller can randomize letter positions.
+6. Output SUBSTANTIVE content only — no placeholders, no meta-descriptions.`
         },
         { role: 'user', content: prompt }
       ],
 
-      temperature: 0.6,
+      temperature: 0.85,
+      top_p: 0.9,
+      frequency_penalty: 0.6,
+      presence_penalty: 0.4,
       max_tokens: 4000
     }),
   });
