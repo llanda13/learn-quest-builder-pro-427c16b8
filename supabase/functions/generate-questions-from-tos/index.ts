@@ -185,6 +185,54 @@ function hasScenarioCue(text: string): boolean {
   return SCENARIO_CUE_PATTERNS.some(p => p.test(text));
 }
 
+const LETTERS = ['A', 'B', 'C', 'D'] as const;
+
+function buildBalancedAnswerTargets(count: number): string[] {
+  const targets: string[] = [];
+  const base = Math.floor(count / LETTERS.length);
+  const extra = count % LETTERS.length;
+  LETTERS.forEach((letter, index) => {
+    for (let i = 0; i < base + (index < extra ? 1 : 0); i++) targets.push(letter);
+  });
+
+  const hasRun = (arr: string[]) => arr.some((letter, index) => index >= 2 && letter === arr[index - 1] && letter === arr[index - 2]);
+  let best = shuffleArray(targets);
+  for (let attempt = 0; attempt < 24 && hasRun(best); attempt++) {
+    const candidate = shuffleArray(targets);
+    if (!hasRun(candidate)) return candidate;
+    best = candidate;
+  }
+  return best;
+}
+
+function forceCorrectAnswerLetter(question: any, targetLetter: string): any {
+  if (!question || question.question_type !== 'mcq' || !question.choices) return question;
+  const choices = question.choices as Record<string, string>;
+  const current = String(question.correct_answer || '').toUpperCase();
+  if (!LETTERS.includes(current as any) || !LETTERS.includes(targetLetter as any) || current === targetLetter) return question;
+  [choices[current], choices[targetLetter]] = [choices[targetLetter], choices[current]];
+  return {
+    ...question,
+    choices,
+    correct_answer: targetLetter,
+    metadata: { ...(question.metadata || {}), answer_rebalanced: true }
+  };
+}
+
+function balanceMCQAnswerDistribution(questions: any[]): any[] {
+  const mcqIndexes = questions
+    .map((q, index) => ({ q, index }))
+    .filter(({ q }) => q?.question_type === 'mcq' && q?.choices);
+  if (mcqIndexes.length < 4) return questions;
+
+  const targets = buildBalancedAnswerTargets(mcqIndexes.length);
+  const balanced = [...questions];
+  mcqIndexes.forEach(({ q, index }, mcqPosition) => {
+    balanced[index] = forceCorrectAnswerLetter(q, targets[mcqPosition]);
+  });
+  return balanced;
+}
+
 // Literal-stem normalization for the deduplication blacklist.
 function normalizeStemForDedup(text: string): string {
   return String(text || '')
