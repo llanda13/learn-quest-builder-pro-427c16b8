@@ -2731,6 +2731,22 @@ serve(async (req) => {
         q.bloom_level = q.bloom_level || slot.bloomLevel;
 
         const normalizedText = normalizeQuestionText(q.question_text || '');
+        const topicKeywords = getTopicKeywords(slot.topic || '');
+        const choicesText = q.choices && typeof q.choices === 'object'
+          ? Object.values(q.choices).join(' ')
+          : '';
+        const topicCorpus = `${normalizedText} ${choicesText}`.toLowerCase();
+        if (topicKeywords.length > 0 && !topicKeywords.some(keyword => topicCorpus.includes(keyword))) {
+          console.warn(`   🚫 Repair rejected topic drift for slot #${slot.itemNumber}: ${normalizedText.substring(0, 60)}...`);
+          continue;
+        }
+
+        const bloomValidation = validateBloomEnforcement(normalizedText, slot.bloomLevel || q.bloom_level || 'understanding');
+        if (!bloomValidation.valid) {
+          console.warn(`   🚫 Repair rejected Bloom mismatch for slot #${slot.itemNumber}: ${bloomValidation.reason}`);
+          continue;
+        }
+
         const similarityCheck = checkSemanticRedundancy(normalizedText, acceptedTexts, 0.88);
         if (similarityCheck.isRedundant) {
           q.needs_review = true;
@@ -2740,30 +2756,16 @@ serve(async (req) => {
         if (q.question_type === 'mcq') {
           const choices = q.choices;
           if (!choices || typeof choices !== 'object') {
-            const fb = createFallbackQuestion(slot, 'Repair MCQ missing choices', slot.itemNumber);
-            fb.slot_id = slot.id;
-            fb.item_number = slot.itemNumber;
-            fb.section_id = slot.sectionId;
-            questionBySlot.set(slot.id, fb);
-            acceptedTexts.push(String(fb.question_text).toLowerCase());
-            repairAccepted++;
             continue;
           }
           const hasAllOptions = ['A', 'B', 'C', 'D'].every(key =>
             choices[key] && typeof choices[key] === 'string' && choices[key].trim().length > 5
           );
           if (!hasAllOptions) {
-            for (const key of ['A', 'B', 'C', 'D']) {
-              if (!choices[key] || typeof choices[key] !== 'string' || choices[key].trim().length <= 5) {
-                choices[key] = `Fallback option ${key} about ${slot.topic}`;
-              }
-            }
-            q.needs_review = true;
-            q.validation_notes = (q.validation_notes ? q.validation_notes + '; ' : '') + 'Repaired incomplete MCQ options';
+            continue;
           }
           if (!['A', 'B', 'C', 'D'].includes(q.correct_answer)) {
-            q.correct_answer = 'A';
-            q.needs_review = true;
+            continue;
           }
         }
 
