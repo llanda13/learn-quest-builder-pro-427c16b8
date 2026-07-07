@@ -2890,6 +2890,9 @@ serve(async (req) => {
       const routingReasons: string[] = [];
       if (q.slot_id !== slot.id) routingReasons.push(`routing:slot_mismatch(expected=${slot.id},got=${q.slot_id})`);
       if (q.item_number !== slot.itemNumber) routingReasons.push(`routing:item_number_mismatch(expected=${slot.itemNumber},got=${q.item_number})`);
+        if (normalizeBloom(q.bloom_level) !== normalizeBloom(slot.bloomLevel)) {
+          routingReasons.push(`routing:bloom_mismatch(expected=${slot.bloomLevel},got=${q.bloom_level})`);
+        }
       if ((q.topic || '').toString().trim().toLowerCase() !== slot.topic.toString().trim().toLowerCase()) {
         routingReasons.push(`routing:topic_index_mismatch(expected="${slot.topic}",got="${q.topic}")`);
       }
