@@ -1367,9 +1367,11 @@ function validateQuestion(question: any, questionType: string): boolean {
       console.warn('MCQ has fewer than 2 options');
       return false;
     }
-    // Default invalid correct_answer to A (will be flagged downstream)
+    // Invalid answer keys are unrecoverable at validation time; never default
+    // to A because that reintroduces structural answer-key bias.
     if (!['A', 'B', 'C', 'D'].includes(question.correct_answer)) {
-      question.correct_answer = 'A';
+      console.warn(`MCQ has invalid correct_answer: ${question.correct_answer}`);
+      return false;
     }
   }
 
