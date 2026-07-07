@@ -2587,12 +2587,26 @@ serve(async (req) => {
         console.log(`   📝 Normalized: "${originalText.substring(0, 40)}..." → "${normalizedText.substring(0, 40)}..."`);
       }
       
-      // VALIDATE: Check Bloom level enforcement (FLAG ONLY — never reject)
+      // VALIDATE: Topic + Bloom alignment are hard acceptance gates. Invalid
+      // items are rejected here so the completion gate regenerates the same
+      // TOS slot instead of exporting recall-level/off-topic HOTS items.
+      const topicKeywords = getTopicKeywords(q.topic || '');
+      const choicesText = q.choices && typeof q.choices === 'object'
+        ? Object.values(q.choices).join(' ')
+        : '';
+      const topicCorpus = `${normalizedText} ${choicesText}`.toLowerCase();
+      if (topicKeywords.length > 0 && !topicKeywords.some(keyword => topicCorpus.includes(keyword))) {
+        const reason = `Missing topic keyword for "${q.topic}"`;
+        console.warn(`   🚫 Rejected topic drift: "${normalizedText.substring(0, 50)}..." - ${reason}`);
+        rejectedQuestions.push({ ...q, rejection_reason: reason });
+        continue;
+      }
+
       const bloomValidation = validateBloomEnforcement(normalizedText, q.bloom_level || 'understanding');
       if (!bloomValidation.valid) {
-        console.warn(`   ⚠️ Bloom validation flag: "${normalizedText.substring(0, 50)}..." - ${bloomValidation.reason}`);
-        q.needs_review = true;
-        q.validation_notes = bloomValidation.reason;
+        console.warn(`   🚫 Rejected Bloom mismatch: "${normalizedText.substring(0, 50)}..." - ${bloomValidation.reason}`);
+        rejectedQuestions.push({ ...q, rejection_reason: bloomValidation.reason });
+        continue;
       }
 
       // VALIDATE: Check semantic similarity (relaxed threshold: 0.88, only near-duplicates)
@@ -2616,40 +2630,34 @@ serve(async (req) => {
             });
             q.choices = choices;
           } else {
-            console.warn(`   ⚠️ MCQ missing choices object, applying repair choices`);
-            choices = {
-              A: `A focused answer about ${q.topic || 'the topic'} with accurate supporting reasoning`,
-              B: `A broad answer that mentions ${q.topic || 'the topic'} but lacks lesson-specific support`,
-              C: `An unrelated answer that does not address the required academic context`,
-              D: `A partial answer that repeats terms without explaining their meaning`
-            };
-            q.choices = choices;
-            q.correct_answer = 'A';
-            q.needs_review = true;
-            q.validation_notes = (q.validation_notes ? q.validation_notes + '; ' : '') + 'Repaired missing MCQ choices';
+            const reason = 'MCQ missing choices object';
+            console.warn(`   🚫 Rejected unrecoverable MCQ: ${reason}`);
+            rejectedQuestions.push({ ...q, rejection_reason: reason });
+            continue;
           }
         }
 
-        // Backfill any missing options with neutral placeholders rather than rejecting
+        // Missing options are unrecoverable at the acceptance gate because
+        // placeholder backfills create invalid answer keys and generic items.
         const missingKeys = ['A', 'B', 'C', 'D'].filter(key =>
           !choices[key] || typeof choices[key] !== 'string' || choices[key].trim().length === 0
         );
         if (missingKeys.length > 0) {
-          for (const k of missingKeys) {
-            choices[k] = `Option ${k}`;
-          }
-          q.needs_review = true;
-          q.validation_notes = (q.validation_notes ? q.validation_notes + '; ' : '') + `Backfilled options: ${missingKeys.join(',')}`;
+          const reason = `MCQ missing options: ${missingKeys.join(',')}`;
+          console.warn(`   🚫 Rejected incomplete MCQ: ${reason}`);
+          rejectedQuestions.push({ ...q, rejection_reason: reason });
+          continue;
         }
 
         // Validate correct answer is A, B, C, or D
         if (!['A', 'B', 'C', 'D'].includes(q.correct_answer)) {
-          console.warn(`   ⚠️ MCQ has invalid correct_answer "${q.correct_answer}", defaulting to A`);
-          q.correct_answer = 'A';
-          q.needs_review = true;
+          const reason = `MCQ has invalid correct_answer "${q.correct_answer}"`;
+          console.warn(`   🚫 Rejected invalid answer key: ${reason}`);
+          rejectedQuestions.push({ ...q, rejection_reason: reason });
+          continue;
         }
 
-        // Placeholder content -> FLAG, not reject
+        // Placeholder content is rejected so the slot can be regenerated.
         const placeholderPatterns = [
           /correct answer (related to|about|for)/i,
           /plausible distractor/i,
@@ -2660,8 +2668,10 @@ serve(async (req) => {
           (opt: any) => placeholderPatterns.some(p => p.test(String(opt)))
         );
         if (hasPlaceholder) {
-          q.needs_review = true;
-          q.validation_notes = (q.validation_notes ? q.validation_notes + '; ' : '') + 'Contains placeholder content';
+          const reason = 'Contains placeholder MCQ content';
+          console.warn(`   🚫 Rejected placeholder MCQ: ${reason}`);
+          rejectedQuestions.push({ ...q, rejection_reason: reason });
+          continue;
         }
       }
       
