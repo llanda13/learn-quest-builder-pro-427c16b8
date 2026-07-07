@@ -948,7 +948,8 @@ function validateBloomEnforcement(
     const listingPatterns = [
       /^(list|name|identify|state)\s+/i,
       /what\s+are\s+the\s+(main|key|primary)\s+\w+\s+of/i,
-      /the\s+factors\s+include/i
+      /the\s+factors\s+include/i,
+      /^(what\s+is|which\s+statement\s+(best\s+)?defines|which\s+term\s+describes)\b/i
     ];
     
     for (const pattern of listingPatterns) {
@@ -958,6 +959,28 @@ function validateBloomEnforcement(
           reason: `${bloomLevel} question should not ask for simple listing`
         };
       }
+    }
+  }
+
+  if (bloomLevel.toLowerCase() === 'evaluating') {
+    const evaluatingSignals = /\b(evaluate|justify|critique|assess|judge|defend|recommend|prioritize|best|most\s+(effective|appropriate|valid|defensible)|strongest|weakest|criterion|criteria|trade-?off)\b/i;
+    const recallOnly = /^(what\s+is|define|identify|list|name|state|describe|explain)\b/i;
+    if (recallOnly.test(questionText) || !evaluatingSignals.test(questionText)) {
+      return {
+        valid: false,
+        reason: 'Evaluating items must require judgment, criteria, and justification—not factual recall'
+      };
+    }
+  }
+
+  if (bloomLevel.toLowerCase() === 'creating') {
+    const creatingSignals = /\b(create|design|develop|construct|propose|formulate|devise|plan|compose|generate|produce|solution|strategy|framework|blueprint|approach)\b/i;
+    const recallOnly = /^(what\s+is|define|identify|list|name|state|describe|explain|which\s+statement\s+(best\s+)?defines)\b/i;
+    if (recallOnly.test(questionText) || !creatingSignals.test(questionText)) {
+      return {
+        valid: false,
+        reason: 'Creating items must require designing, proposing, or constructing a new solution—not factual recall'
+      };
     }
   }
   
