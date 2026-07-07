@@ -1,5 +1,6 @@
 import { supabase } from "@/integrations/supabase/client";
 import seedrandom from 'seedrandom';
+import { shuffleExamChoices } from "@/utils/shuffleExamChoices";
 
 export interface Question {
   id: string;
@@ -50,27 +51,7 @@ function shuffleArray<T>(array: T[], seed?: string): T[] {
  * Shuffle choices within a multiple choice question
  */
 function shuffleChoices(question: Question, seed: string): Question {
-  if (question.question_type !== 'Multiple Choice' || !question.choices) {
-    return question;
-  }
-
-  const entries = Object.entries(question.choices);
-  const shuffled = shuffleArray(entries, seed);
-  
-  const newChoices: Record<string, string> = {};
-  const mapping: Record<string, string> = {};
-  
-  shuffled.forEach(([oldKey, value], index) => {
-    const newKey = String.fromCharCode(65 + index); // A, B, C, D
-    newChoices[newKey] = value;
-    mapping[oldKey] = newKey;
-  });
-
-  return {
-    ...question,
-    choices: newChoices,
-    correct_answer: mapping[question.correct_answer || ''] || question.correct_answer
-  };
+  return shuffleExamChoices([question]).items[0] as Question;
 }
 
 /**
@@ -139,9 +120,7 @@ export async function generateMultipleVersions(
 
     // Shuffle choices if enabled
     if (config.shuffleChoices) {
-      versionQuestions = versionQuestions.map(q => 
-        shuffleChoices(q, `${versionSeed}-${q.id}`)
-      );
+      versionQuestions = shuffleExamChoices(versionQuestions).items as Question[];
     }
 
     // Generate answer key

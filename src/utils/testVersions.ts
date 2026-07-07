@@ -1,4 +1,5 @@
 import seedrandom from 'seedrandom';
+import { shuffleExamChoices } from '@/utils/shuffleExamChoices';
 
 export interface Question {
   id: string;
@@ -76,29 +77,7 @@ function shuffleQuestions(questions: Question[], seed?: string): Question[] {
  * Shuffle choices within multiple choice questions
  */
 function shuffleChoices(question: Question, seed?: string): Question {
-  if (question.question_type !== 'Multiple Choice' || !question.choices) {
-    return question;
-  }
-
-  const entries = Object.entries(question.choices);
-  const shuffled = seed ? 
-    shuffleWithSeed(entries, seed) : 
-    shuffleArray(entries);
-
-  const newChoices: Record<string, string> = {};
-  const mapping: Record<string, string> = {};
-  
-  shuffled.forEach(([oldKey, value], index) => {
-    const newKey = String.fromCharCode(65 + index); // A, B, C, D
-    newChoices[newKey] = value;
-    mapping[oldKey] = newKey;
-  });
-
-  return {
-    ...question,
-    choices: newChoices,
-    correct_answer: mapping[question.correct_answer || ''] || question.correct_answer
-  };
+  return shuffleExamChoices([question]).items[0] as Question;
 }
 
 function shuffleWithSeed<T>(array: T[], seed: string): T[] {
@@ -130,9 +109,7 @@ export function generateTestVersions(
     
     // Shuffle choices if enabled
     if (config.shuffle_choices) {
-      versionQuestions = versionQuestions.map(q => 
-        shuffleChoices(q, `${versionSeed}-${q.id}`)
-      );
+      versionQuestions = shuffleExamChoices(versionQuestions).items as Question[];
     }
     
     // Generate answer key

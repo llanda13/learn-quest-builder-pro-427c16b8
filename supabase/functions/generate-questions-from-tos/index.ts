@@ -185,6 +185,54 @@ function hasScenarioCue(text: string): boolean {
   return SCENARIO_CUE_PATTERNS.some(p => p.test(text));
 }
 
+const LETTERS = ['A', 'B', 'C', 'D'] as const;
+
+function buildBalancedAnswerTargets(count: number): string[] {
+  const targets: string[] = [];
+  const base = Math.floor(count / LETTERS.length);
+  const extra = count % LETTERS.length;
+  LETTERS.forEach((letter, index) => {
+    for (let i = 0; i < base + (index < extra ? 1 : 0); i++) targets.push(letter);
+  });
+
+  const hasRun = (arr: string[]) => arr.some((letter, index) => index >= 2 && letter === arr[index - 1] && letter === arr[index - 2]);
+  let best = shuffleArray(targets);
+  for (let attempt = 0; attempt < 24 && hasRun(best); attempt++) {
+    const candidate = shuffleArray(targets);
+    if (!hasRun(candidate)) return candidate;
+    best = candidate;
+  }
+  return best;
+}
+
+function forceCorrectAnswerLetter(question: any, targetLetter: string): any {
+  if (!question || question.question_type !== 'mcq' || !question.choices) return question;
+  const choices = question.choices as Record<string, string>;
+  const current = String(question.correct_answer || '').toUpperCase();
+  if (!LETTERS.includes(current as any) || !LETTERS.includes(targetLetter as any) || current === targetLetter) return question;
+  [choices[current], choices[targetLetter]] = [choices[targetLetter], choices[current]];
+  return {
+    ...question,
+    choices,
+    correct_answer: targetLetter,
+    metadata: { ...(question.metadata || {}), answer_rebalanced: true }
+  };
+}
+
+function balanceMCQAnswerDistribution(questions: any[]): any[] {
+  const mcqIndexes = questions
+    .map((q, index) => ({ q, index }))
+    .filter(({ q }) => q?.question_type === 'mcq' && q?.choices);
+  if (mcqIndexes.length < 4) return questions;
+
+  const targets = buildBalancedAnswerTargets(mcqIndexes.length);
+  const balanced = [...questions];
+  mcqIndexes.forEach(({ q, index }, mcqPosition) => {
+    balanced[index] = forceCorrectAnswerLetter(q, targets[mcqPosition]);
+  });
+  return balanced;
+}
+
 // Literal-stem normalization for the deduplication blacklist.
 function normalizeStemForDedup(text: string): string {
   return String(text || '')
@@ -900,7 +948,8 @@ function validateBloomEnforcement(
     const listingPatterns = [
       /^(list|name|identify|state)\s+/i,
       /what\s+are\s+the\s+(main|key|primary)\s+\w+\s+of/i,
-      /the\s+factors\s+include/i
+      /the\s+factors\s+include/i,
+      /^(what\s+is|which\s+statement\s+(best\s+)?defines|which\s+term\s+describes)\b/i
     ];
     
     for (const pattern of listingPatterns) {
@@ -910,6 +959,28 @@ function validateBloomEnforcement(
           reason: `${bloomLevel} question should not ask for simple listing`
         };
       }
+    }
+  }
+
+  if (bloomLevel.toLowerCase() === 'evaluating') {
+    const evaluatingSignals = /\b(evaluate|justify|critique|assess|judge|defend|recommend|prioritize|best|most\s+(effective|appropriate|valid|defensible)|strongest|weakest|criterion|criteria|trade-?off)\b/i;
+    const recallOnly = /^(what\s+is|define|identify|list|name|state|describe|explain)\b/i;
+    if (recallOnly.test(questionText) || !evaluatingSignals.test(questionText)) {
+      return {
+        valid: false,
+        reason: 'Evaluating items must require judgment, criteria, and justification—not factual recall'
+      };
+    }
+  }
+
+  if (bloomLevel.toLowerCase() === 'creating') {
+    const creatingSignals = /\b(create|design|develop|construct|propose|formulate|devise|plan|compose|generate|produce|solution|strategy|framework|blueprint|approach)\b/i;
+    const recallOnly = /^(what\s+is|define|identify|list|name|state|describe|explain|which\s+statement\s+(best\s+)?defines)\b/i;
+    if (recallOnly.test(questionText) || !creatingSignals.test(questionText)) {
+      return {
+        valid: false,
+        reason: 'Creating items must require designing, proposing, or constructing a new solution—not factual recall'
+      };
     }
   }
   
@@ -1123,6 +1194,11 @@ function getQuestionRejectionReason(
     return `Higher-order Bloom (${slot.bloomLevel}) requires a scenario/case/dataset cue in the stem`;
   }
 
+  const bloomValidation = validateBloomEnforcement(questionText, slot.bloomLevel || question.bloom_level || 'understanding');
+  if (!bloomValidation.valid) {
+    return bloomValidation.reason || `Question does not satisfy ${slot.bloomLevel} cognitive demand`;
+  }
+
   // Zero-Redundancy Filter: literal + semantic match against the session
   // compiled-item blacklist. Any hit forces a fresh generation session for
   // this coordinate.
@@ -1291,9 +1367,11 @@ function validateQuestion(question: any, questionType: string): boolean {
       console.warn('MCQ has fewer than 2 options');
       return false;
     }
-    // Default invalid correct_answer to A (will be flagged downstream)
+    // Invalid answer keys are unrecoverable at validation time; never default
+    // to A because that reintroduces structural answer-key bias.
     if (!['A', 'B', 'C', 'D'].includes(question.correct_answer)) {
-      question.correct_answer = 'A';
+      console.warn(`MCQ has invalid correct_answer: ${question.correct_answer}`);
+      return false;
     }
   }
 
@@ -2511,12 +2589,26 @@ serve(async (req) => {
         console.log(`   📝 Normalized: "${originalText.substring(0, 40)}..." → "${normalizedText.substring(0, 40)}..."`);
       }
       
-      // VALIDATE: Check Bloom level enforcement (FLAG ONLY — never reject)
+      // VALIDATE: Topic + Bloom alignment are hard acceptance gates. Invalid
+      // items are rejected here so the completion gate regenerates the same
+      // TOS slot instead of exporting recall-level/off-topic HOTS items.
+      const topicKeywords = getTopicKeywords(q.topic || '');
+      const choicesText = q.choices && typeof q.choices === 'object'
+        ? Object.values(q.choices).join(' ')
+        : '';
+      const topicCorpus = `${normalizedText} ${choicesText}`.toLowerCase();
+      if (topicKeywords.length > 0 && !topicKeywords.some(keyword => topicCorpus.includes(keyword))) {
+        const reason = `Missing topic keyword for "${q.topic}"`;
+        console.warn(`   🚫 Rejected topic drift: "${normalizedText.substring(0, 50)}..." - ${reason}`);
+        rejectedQuestions.push({ ...q, rejection_reason: reason });
+        continue;
+      }
+
       const bloomValidation = validateBloomEnforcement(normalizedText, q.bloom_level || 'understanding');
       if (!bloomValidation.valid) {
-        console.warn(`   ⚠️ Bloom validation flag: "${normalizedText.substring(0, 50)}..." - ${bloomValidation.reason}`);
-        q.needs_review = true;
-        q.validation_notes = bloomValidation.reason;
+        console.warn(`   🚫 Rejected Bloom mismatch: "${normalizedText.substring(0, 50)}..." - ${bloomValidation.reason}`);
+        rejectedQuestions.push({ ...q, rejection_reason: bloomValidation.reason });
+        continue;
       }
 
       // VALIDATE: Check semantic similarity (relaxed threshold: 0.88, only near-duplicates)
@@ -2540,40 +2632,34 @@ serve(async (req) => {
             });
             q.choices = choices;
           } else {
-            console.warn(`   ⚠️ MCQ missing choices object, applying repair choices`);
-            choices = {
-              A: `A focused answer about ${q.topic || 'the topic'} with accurate supporting reasoning`,
-              B: `A broad answer that mentions ${q.topic || 'the topic'} but lacks lesson-specific support`,
-              C: `An unrelated answer that does not address the required academic context`,
-              D: `A partial answer that repeats terms without explaining their meaning`
-            };
-            q.choices = choices;
-            q.correct_answer = 'A';
-            q.needs_review = true;
-            q.validation_notes = (q.validation_notes ? q.validation_notes + '; ' : '') + 'Repaired missing MCQ choices';
+            const reason = 'MCQ missing choices object';
+            console.warn(`   🚫 Rejected unrecoverable MCQ: ${reason}`);
+            rejectedQuestions.push({ ...q, rejection_reason: reason });
+            continue;
           }
         }
 
-        // Backfill any missing options with neutral placeholders rather than rejecting
+        // Missing options are unrecoverable at the acceptance gate because
+        // placeholder backfills create invalid answer keys and generic items.
         const missingKeys = ['A', 'B', 'C', 'D'].filter(key =>
           !choices[key] || typeof choices[key] !== 'string' || choices[key].trim().length === 0
         );
         if (missingKeys.length > 0) {
-          for (const k of missingKeys) {
-            choices[k] = `Option ${k}`;
-          }
-          q.needs_review = true;
-          q.validation_notes = (q.validation_notes ? q.validation_notes + '; ' : '') + `Backfilled options: ${missingKeys.join(',')}`;
+          const reason = `MCQ missing options: ${missingKeys.join(',')}`;
+          console.warn(`   🚫 Rejected incomplete MCQ: ${reason}`);
+          rejectedQuestions.push({ ...q, rejection_reason: reason });
+          continue;
         }
 
         // Validate correct answer is A, B, C, or D
         if (!['A', 'B', 'C', 'D'].includes(q.correct_answer)) {
-          console.warn(`   ⚠️ MCQ has invalid correct_answer "${q.correct_answer}", defaulting to A`);
-          q.correct_answer = 'A';
-          q.needs_review = true;
+          const reason = `MCQ has invalid correct_answer "${q.correct_answer}"`;
+          console.warn(`   🚫 Rejected invalid answer key: ${reason}`);
+          rejectedQuestions.push({ ...q, rejection_reason: reason });
+          continue;
         }
 
-        // Placeholder content -> FLAG, not reject
+        // Placeholder content is rejected so the slot can be regenerated.
         const placeholderPatterns = [
           /correct answer (related to|about|for)/i,
           /plausible distractor/i,
@@ -2584,8 +2670,10 @@ serve(async (req) => {
           (opt: any) => placeholderPatterns.some(p => p.test(String(opt)))
         );
         if (hasPlaceholder) {
-          q.needs_review = true;
-          q.validation_notes = (q.validation_notes ? q.validation_notes + '; ' : '') + 'Contains placeholder content';
+          const reason = 'Contains placeholder MCQ content';
+          console.warn(`   🚫 Rejected placeholder MCQ: ${reason}`);
+          rejectedQuestions.push({ ...q, rejection_reason: reason });
+          continue;
         }
       }
       
@@ -2645,6 +2733,22 @@ serve(async (req) => {
         q.bloom_level = q.bloom_level || slot.bloomLevel;
 
         const normalizedText = normalizeQuestionText(q.question_text || '');
+        const topicKeywords = getTopicKeywords(slot.topic || '');
+        const choicesText = q.choices && typeof q.choices === 'object'
+          ? Object.values(q.choices).join(' ')
+          : '';
+        const topicCorpus = `${normalizedText} ${choicesText}`.toLowerCase();
+        if (topicKeywords.length > 0 && !topicKeywords.some(keyword => topicCorpus.includes(keyword))) {
+          console.warn(`   🚫 Repair rejected topic drift for slot #${slot.itemNumber}: ${normalizedText.substring(0, 60)}...`);
+          continue;
+        }
+
+        const bloomValidation = validateBloomEnforcement(normalizedText, slot.bloomLevel || q.bloom_level || 'understanding');
+        if (!bloomValidation.valid) {
+          console.warn(`   🚫 Repair rejected Bloom mismatch for slot #${slot.itemNumber}: ${bloomValidation.reason}`);
+          continue;
+        }
+
         const similarityCheck = checkSemanticRedundancy(normalizedText, acceptedTexts, 0.88);
         if (similarityCheck.isRedundant) {
           q.needs_review = true;
@@ -2654,30 +2758,16 @@ serve(async (req) => {
         if (q.question_type === 'mcq') {
           const choices = q.choices;
           if (!choices || typeof choices !== 'object') {
-            const fb = createFallbackQuestion(slot, 'Repair MCQ missing choices', slot.itemNumber);
-            fb.slot_id = slot.id;
-            fb.item_number = slot.itemNumber;
-            fb.section_id = slot.sectionId;
-            questionBySlot.set(slot.id, fb);
-            acceptedTexts.push(String(fb.question_text).toLowerCase());
-            repairAccepted++;
             continue;
           }
           const hasAllOptions = ['A', 'B', 'C', 'D'].every(key =>
             choices[key] && typeof choices[key] === 'string' && choices[key].trim().length > 5
           );
           if (!hasAllOptions) {
-            for (const key of ['A', 'B', 'C', 'D']) {
-              if (!choices[key] || typeof choices[key] !== 'string' || choices[key].trim().length <= 5) {
-                choices[key] = `Fallback option ${key} about ${slot.topic}`;
-              }
-            }
-            q.needs_review = true;
-            q.validation_notes = (q.validation_notes ? q.validation_notes + '; ' : '') + 'Repaired incomplete MCQ options';
+            continue;
           }
           if (!['A', 'B', 'C', 'D'].includes(q.correct_answer)) {
-            q.correct_answer = 'A';
-            q.needs_review = true;
+            continue;
           }
         }
 
@@ -2717,7 +2807,7 @@ serve(async (req) => {
     }
 
     // Ordered output: index in `trimmedQuestions` is exactly `itemNumber - 1`. No slicing magic.
-    const trimmedQuestions = allSlots.map(s => questionBySlot.get(s.id));
+    const trimmedQuestions = balanceMCQAnswerDistribution(allSlots.map(s => questionBySlot.get(s.id)));
 
     // Verify we have exactly the required count
     if (trimmedQuestions.length !== requiredTotal || trimmedQuestions.some(q => !q)) {
@@ -2802,6 +2892,9 @@ serve(async (req) => {
       const routingReasons: string[] = [];
       if (q.slot_id !== slot.id) routingReasons.push(`routing:slot_mismatch(expected=${slot.id},got=${q.slot_id})`);
       if (q.item_number !== slot.itemNumber) routingReasons.push(`routing:item_number_mismatch(expected=${slot.itemNumber},got=${q.item_number})`);
+        if (normalizeBloom(q.bloom_level) !== normalizeBloom(slot.bloomLevel)) {
+          routingReasons.push(`routing:bloom_mismatch(expected=${slot.bloomLevel},got=${q.bloom_level})`);
+        }
       if ((q.topic || '').toString().trim().toLowerCase() !== slot.topic.toString().trim().toLowerCase()) {
         routingReasons.push(`routing:topic_index_mismatch(expected="${slot.topic}",got="${q.topic}")`);
       }

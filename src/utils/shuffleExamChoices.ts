@@ -178,38 +178,53 @@ function rotateCorrectTo(p: Prepared, targetLetter: string): void {
  * question currently assigned to that letter and rotate its correct option
  * into the most under-represented letter.
  */
+function buildBalancedTargetLetters(letters: readonly string[], n: number): string[] {
+  const targets: string[] = [];
+  const base = Math.floor(n / letters.length);
+  const extra = n % letters.length;
+
+  letters.forEach((letter, index) => {
+    const count = base + (index < extra ? 1 : 0);
+    for (let i = 0; i < count; i++) targets.push(letter);
+  });
+
+  // Randomize the balanced pool, retrying to avoid visible answer-key runs.
+  const hasLongRun = (arr: string[]) =>
+    arr.some((letter, index) => index >= 2 && letter === arr[index - 1] && letter === arr[index - 2]);
+
+  let best = fisherYates(targets);
+  for (let attempt = 0; attempt < 24 && hasLongRun(best); attempt++) {
+    const candidate = fisherYates(targets);
+    if (!hasLongRun(candidate)) return candidate;
+    const longestRun = (arr: string[]) => {
+      let max = 1;
+      let run = 1;
+      for (let i = 1; i < arr.length; i++) {
+        run = arr[i] === arr[i - 1] ? run + 1 : 1;
+        max = Math.max(max, run);
+      }
+      return max;
+    };
+    if (longestRun(candidate) < longestRun(best)) best = candidate;
+  }
+
+  return best;
+}
+
 function rebalance(preps: Prepared[]): void {
   const mcqs = preps.filter((p) => p.isMcq && p.entries.length >= 2);
   const n = mcqs.length;
   if (n < 4) return;
 
-  const optionCount = Math.min(
-    4,
-    Math.max(...mcqs.map((p) => p.entries.length)),
-  );
+  const optionCount = Math.min(4, Math.max(...mcqs.map((p) => p.entries.length)));
   const letters = LETTERS.slice(0, optionCount);
-  // Strict fair share: no letter may exceed ceil(n / optionCount).
-  const fairCap = Math.ceil(n / optionCount);
 
-  const count = (): Record<string, number> => {
-    const c: Record<string, number> = {};
-    for (const L of letters) c[L] = 0;
-    for (const p of mcqs) c[correctLetter(p)] = (c[correctLetter(p)] || 0) + 1;
-    return c;
-  };
-
-  for (let guard = 0; guard < n * 4; guard++) {
-    const c = count();
-    const over = letters.find((L) => c[L] > fairCap);
-    if (!over) break;
-    // Pick the most under-represented letter.
-    const under = letters.reduce((a, b) => (c[a] <= c[b] ? a : b));
-    if (under === over) break;
-    // Move ONE question from `over` to `under`.
-    const donor = mcqs.find((p) => correctLetter(p) === over);
-    if (!donor) break;
-    rotateCorrectTo(donor, under);
-  }
+  // Final key compilation is intentionally distribution-aware: every MCQ was
+  // independently shuffled first, then the correct option is moved to a
+  // randomized balanced target letter. This prevents both aggregate skew
+  // (e.g. 20 A's) and visible long runs while preserving each item's options.
+  const targets = buildBalancedTargetLetters(letters, n);
+  mcqs.forEach((p, index) => rotateCorrectTo(p, targets[index]));
 }
 
 // ---------- public API ----------------------------------------------------
