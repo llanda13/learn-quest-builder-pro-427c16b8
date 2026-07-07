@@ -5,6 +5,7 @@ import type { BloomLevel, Difficulty } from "./classify";
 import { QuestionUniquenessStore, createQuestionFingerprint } from "./questionUniquenessChecker";
 import type { AnswerType, KnowledgeDimension } from "@/types/knowledge";
 import { resolveSubjectMetadata } from "./subjectMetadataResolver";
+import { shuffleExamChoices } from "@/utils/shuffleExamChoices";
 
 export interface TOSRequirement {
   topic: string;
@@ -497,9 +498,10 @@ export class CompleteTestGenerator {
       ...q,
       question_number: index + 1
     }));
+    const securedQuestions = shuffleExamChoices(numberedQuestions).items;
 
     // Generate answer key
-    const answerKey = numberedQuestions.map((q, index) => ({
+    const answerKey = securedQuestions.map((q, index) => ({
       question_number: index + 1,
       question_id: q.id,
       correct_answer: q.correct_answer,
@@ -519,7 +521,7 @@ export class CompleteTestGenerator {
         year_section: metadata.year_section || null,
         exam_period: metadata.exam_period || null,
         school_year: metadata.school_year || null,
-        items: numberedQuestions,
+        items: securedQuestions,
         answer_key: answerKey,
         tos_id: metadata.tos_id || null,
         created_by: userId,

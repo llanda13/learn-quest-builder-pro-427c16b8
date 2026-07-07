@@ -1,4 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
+import { shuffleExamChoices } from "@/utils/shuffleExamChoices";
 
 export interface TOSCriteria {
   topic: string;
@@ -194,7 +195,17 @@ export async function generateTestFromTOS(
     throw new Error("No questions were generated. Please check your TOS criteria.");
   }
 
-  // Step 4: Store generated test
+  // Step 4: Store generated test after final choice shuffle + answer-key recalculation
+  const securedQuestions = shuffleExamChoices(selectedQuestions).items;
+  const securedAnswerKey = securedQuestions.map((q, index) => ({
+    question_number: index + 1,
+    question_id: q.id,
+    correct_answer: q.correct_answer,
+    points: 1,
+    bloom_level: q.bloom_level,
+    topic: q.topic
+  }));
+
   const testData = {
     title: testTitle,
     subject: testMetadata?.subject || null,
@@ -202,8 +213,8 @@ export async function generateTestFromTOS(
     year_section: testMetadata?.year_section || null,
     exam_period: testMetadata?.exam_period || null,
     school_year: testMetadata?.school_year || null,
-    items: selectedQuestions,
-    answer_key: answerKey,
+    items: securedQuestions,
+    answer_key: securedAnswerKey,
     tos_id: testMetadata?.tos_id || null,
     points_per_question: testMetadata?.points_per_question || 1,
     created_by: user.id  // Required for RLS policy
@@ -261,8 +272,8 @@ export async function generateTestFromTOS(
   return {
     id: generatedTest.id,
     title: generatedTest.title,
-    questions: selectedQuestions,
-    answer_key: answerKey,
+    questions: securedQuestions,
+    answer_key: securedAnswerKey,
     generated_at: generatedTest.created_at
   };
 }

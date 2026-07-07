@@ -2,6 +2,7 @@ import { supabase } from "@/integrations/supabase/client";
 import { TOS } from "../db/tos";
 import type { BloomLevel, Difficulty } from "./classify";
 import { generateQuestionsWithAI } from "./questionGenerator";
+import { shuffleExamChoices } from "@/utils/shuffleExamChoices";
 
 export interface TOSCriteria {
   topic: string;
@@ -434,9 +435,10 @@ async function assembleFinalTest(
     ...q,
     question_number: index + 1
   }));
+  const securedQuestions = shuffleExamChoices(numberedQuestions).items;
 
   // Generate answer key
-  const answerKey = numberedQuestions.map((q, index) => ({
+  const answerKey = securedQuestions.map((q, index) => ({
     question_number: index + 1,
     question_id: q.id,
     correct_answer: q.correct_answer,
@@ -456,7 +458,7 @@ async function assembleFinalTest(
       year_section: testData.year_section || null,
       exam_period: testData.exam_period || null,
       school_year: testData.school_year || null,
-      items: numberedQuestions,
+      items: securedQuestions,
       answer_key: answerKey,
       tos_id: tosId,
       created_by: userId,
