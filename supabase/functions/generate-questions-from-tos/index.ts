@@ -1194,6 +1194,11 @@ function getQuestionRejectionReason(
     return `Higher-order Bloom (${slot.bloomLevel}) requires a scenario/case/dataset cue in the stem`;
   }
 
+  const bloomValidation = validateBloomEnforcement(questionText, slot.bloomLevel || question.bloom_level || 'understanding');
+  if (!bloomValidation.valid) {
+    return bloomValidation.reason || `Question does not satisfy ${slot.bloomLevel} cognitive demand`;
+  }
+
   // Zero-Redundancy Filter: literal + semantic match against the session
   // compiled-item blacklist. Any hit forces a fresh generation session for
   // this coordinate.
