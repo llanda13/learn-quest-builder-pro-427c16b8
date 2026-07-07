@@ -2805,7 +2805,7 @@ serve(async (req) => {
     }
 
     // Ordered output: index in `trimmedQuestions` is exactly `itemNumber - 1`. No slicing magic.
-    const trimmedQuestions = allSlots.map(s => questionBySlot.get(s.id));
+    const trimmedQuestions = balanceMCQAnswerDistribution(allSlots.map(s => questionBySlot.get(s.id)));
 
     // Verify we have exactly the required count
     if (trimmedQuestions.length !== requiredTotal || trimmedQuestions.some(q => !q)) {
