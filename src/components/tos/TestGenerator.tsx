@@ -7,6 +7,7 @@ import { Badge } from "@/components/ui/badge"
 import { Loader2, Brain, Database, CheckCircle, AlertCircle } from "lucide-react"
 import { TOSData } from "@/pages/TOS"
 import { TestQuestion } from "./GeneratedTest"
+import { shuffleExamChoices } from "@/utils/shuffleExamChoices"
 
 interface TestGeneratorProps {
   tosData: TOSData
@@ -323,9 +324,13 @@ export function TestGenerator({ tosData, onTestGenerated, onCancel }: TestGenera
         ...q,
         question_number: idx + 1
       }))
+      const securedQuestions = shuffleExamChoices(numberedQuestions).items.map((q: any, idx: number) => ({
+        ...q,
+        question_number: idx + 1
+      }))
 
       // Generate answer key
-      const answerKey = numberedQuestions.map((q: any) => ({
+      const answerKey = securedQuestions.map((q: any) => ({
         question_number: q.question_number,
         question_id: q.id,
         correct_answer: q.correct_answer,
@@ -340,7 +345,7 @@ export function TestGenerator({ tosData, onTestGenerated, onCancel }: TestGenera
         year_section: tosData.yearSection,
         exam_period: tosData.examPeriod,
         school_year: tosData.schoolYear,
-        items: numberedQuestions,
+        items: securedQuestions,
         answer_key: answerKey,
         tos_id: tosData.id || null,
         points_per_question: 1,
@@ -358,7 +363,7 @@ export function TestGenerator({ tosData, onTestGenerated, onCancel }: TestGenera
         throw new Error('Failed to save generated test: ' + insertError.message)
       }
 
-      console.log('✅ Test saved with', numberedQuestions.length, 'questions')
+      console.log('✅ Test saved with', securedQuestions.length, 'questions')
       return generatedTest.id
     } catch (error) {
       console.error('Error generating test from TOS:', error)

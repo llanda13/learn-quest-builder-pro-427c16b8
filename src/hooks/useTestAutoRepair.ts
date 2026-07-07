@@ -1,6 +1,7 @@
 import { useState, useEffect, useCallback } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { useToast } from '@/hooks/use-toast';
+import { shuffleExamChoices } from '@/utils/shuffleExamChoices';
 
 interface RepairResult {
   repaired: boolean;
@@ -99,13 +100,13 @@ export function useTestAutoRepair(testId: string | undefined) {
       }
 
       // Merge with existing items
-      const repairedItems = [
+      const repairedItems = shuffleExamChoices([
         ...items,
         ...newQuestions.slice(0, missing).map((q: any, idx: number) => ({
           ...q,
           question_number: currentCount + idx + 1
         }))
-      ];
+      ]).items.map((q: any, idx: number) => ({ ...q, question_number: idx + 1 }));
 
       // Update answer key
       const repairedAnswerKey = repairedItems.map((q: any, idx: number) => ({

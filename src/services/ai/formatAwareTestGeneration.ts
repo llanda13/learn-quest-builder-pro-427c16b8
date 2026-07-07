@@ -16,6 +16,7 @@ import type { TOSCriteria } from "./testGenerationService";
 import { QuestionUniquenessStore, createQuestionFingerprint, extractConcept } from "./questionUniquenessChecker";
 import type { AnswerType, KnowledgeDimension } from "@/types/knowledge";
 import { resolveSubjectMetadata } from "./subjectMetadataResolver";
+import { shuffleExamChoices } from "@/utils/shuffleExamChoices";
 
 export interface FormatAwareTestConfig {
   format: ExamFormat;
@@ -274,6 +275,22 @@ export async function generateFormatAwareTest(
 
   console.log(`✅ TOS CONTRACT SATISFIED: ${allQuestions.length}/${requiredTotal} questions`);
 
+  // Final compile pass: independently shuffle MCQ choices, rebalance answer
+  // letters, and recalculate the stored key before persistence/export.
+  const securedQuestions = shuffleExamChoices(allQuestions).items as SectionedQuestion[];
+  const securedAnswerKey = securedQuestions.map((q) => {
+    const existing = answerKey.find((entry) => entry.question_number === q.question_number) || {};
+    return {
+      ...existing,
+      question_number: q.question_number,
+      question_id: q.id,
+      correct_answer: q.correct_answer,
+      section: q.section_label,
+      question_type: q.question_type,
+      points: q.points
+    };
+  });
+
   // Save to database - cast items and answer_key to Json type
   const testData = {
     title: config.testTitle,
@@ -283,8 +300,8 @@ export async function generateFormatAwareTest(
     exam_period: config.testMetadata?.exam_period || null,
     school_year: config.testMetadata?.school_year || null,
     semester: config.testMetadata?.semester || null,
-    items: allQuestions as unknown as any,
-    answer_key: answerKey as unknown as any,
+    items: securedQuestions as unknown as any,
+    answer_key: securedAnswerKey as unknown as any,
     tos_id: config.testMetadata?.tos_id || null,
     points_per_question: 1,
     created_by: user.id,
@@ -308,8 +325,8 @@ export async function generateFormatAwareTest(
     title: config.testTitle,
     format_id: config.format.id,
     sections: sectionResults,
-    answer_key: answerKey,
-    totalItems: allQuestions.length,
+    answer_key: securedAnswerKey,
+    totalItems: securedQuestions.length,
     totalPoints
   };
 }
