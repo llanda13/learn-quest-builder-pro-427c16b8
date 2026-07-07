@@ -14,13 +14,24 @@ function applyChoiceRandomization<T extends { items: any; answer_key?: any }>(
   const { items, answerKey, distribution, reshuffleAttempts } = shuffleExamChoices(
     payload.items,
   );
-  // Merge recomputed MCQ letters into the existing answer_key map (preserve
-  // any non-MCQ entries already present).
-  const existing =
-    payload.answer_key && typeof payload.answer_key === "object" && !Array.isArray(payload.answer_key)
+  // Merge recomputed MCQ letters into the existing answer key while preserving
+  // its original shape (array for legacy generated_tests rows, map for versioned tests).
+  const existing = Array.isArray(payload.answer_key)
+    ? payload.answer_key.map((entry: any, index: number) => ({
+        ...entry,
+        correct_answer: answerKey[String(index + 1)] ?? entry?.correct_answer,
+      }))
+    : payload.answer_key && typeof payload.answer_key === "object"
       ? { ...(payload.answer_key as Record<string, any>) }
       : {};
-  for (const [num, letter] of Object.entries(answerKey)) existing[num] = letter;
+  if (!Array.isArray(existing)) {
+    for (const [num, letter] of Object.entries(answerKey)) {
+      const current = existing[num];
+      existing[num] = current && typeof current === "object"
+        ? { ...current, correct_answer: letter }
+        : letter;
+    }
+  }
   console.info(
     `[exam-security] choice randomization applied (n=${items.length}, attempts=${reshuffleAttempts}, dist=${JSON.stringify(distribution)})`,
   );

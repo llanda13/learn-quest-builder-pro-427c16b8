@@ -1,6 +1,7 @@
 import { useState, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
 import { toast } from 'sonner';
+import { shuffleExamChoices } from '@/utils/shuffleExamChoices';
 
 interface Question {
   id: string;
@@ -55,33 +56,7 @@ export const useTestVersions = () => {
 
   // Shuffle answer choices and update correct answer
   const shuffleQuestionChoices = (question: Question): Question => {
-    if (!question.choices || question.question_type !== 'mcq') {
-      return question;
-    }
-
-    const choiceEntries = Object.entries(question.choices);
-    const shuffledEntries = shuffleArray(choiceEntries);
-    
-    // Create new choice mapping
-    const newChoices: Record<string, string> = {};
-    const choiceKeys = ['A', 'B', 'C', 'D', 'E', 'F'];
-    
-    shuffledEntries.forEach(([, value], index) => {
-      if (index < choiceKeys.length) {
-        newChoices[choiceKeys[index]] = value;
-      }
-    });
-
-    // Find new position of correct answer
-    const originalCorrectValue = question.correct_answer;
-    const newCorrectKey = shuffledEntries.findIndex(([, value]) => value === originalCorrectValue);
-    const newCorrectAnswer = newCorrectKey !== -1 ? choiceKeys[newCorrectKey] : question.correct_answer;
-
-    return {
-      ...question,
-      choices: newChoices,
-      correct_answer: newCorrectAnswer
-    };
+    return shuffleExamChoices([question]).items[0] as Question;
   };
 
   // Generate multiple test versions
@@ -106,7 +81,7 @@ export const useTestVersions = () => {
 
       // Shuffle answer choices if enabled
       if (metadata.shuffle_choices) {
-        versionQuestions = versionQuestions.map(shuffleQuestionChoices);
+        versionQuestions = shuffleExamChoices(versionQuestions).items as Question[];
       }
 
       // Create answer key for this version

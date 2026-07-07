@@ -1,5 +1,6 @@
 import { Questions, Tests, ActivityLog } from '@/services/db';
 import { generateAIQuestion, generateAIQuestionsForNeed, analyzeTopicCoverage } from './classify';
+import { shuffleExamChoices } from '@/utils/shuffleExamChoices';
 
 export type TestNeed = {
   topic: string;
@@ -217,39 +218,7 @@ export function shuffleArray<T>(array: T[]): T[] {
  * Shuffle MCQ choices and update correct answer
  */
 export function shuffleChoices(question: any): { question: any; mapping: Record<string, string> } {
-  if (question.question_type !== 'mcq' && question.question_type !== 'multiple_choice' || !question.choices) {
-    return { question, mapping: {} };
-  }
-
-  const choiceEntries = Object.entries(question.choices);
-  const shuffledEntries = shuffleArray(choiceEntries);
-  
-  // Create new choice mapping
-  const newChoices: Record<string, string> = {};
-  const choiceKeys = ['A', 'B', 'C', 'D', 'E', 'F'];
-  const mapping: Record<string, string> = {};
-  
-  shuffledEntries.forEach(([originalKey, value], index) => {
-    if (index < choiceKeys.length) {
-      const newKey = choiceKeys[index];
-      newChoices[newKey] = value as string;
-      mapping[newKey] = originalKey; // Track original position
-    }
-  });
-
-  // Find new position of correct answer
-  const originalCorrectValue = question.choices[question.correct_answer];
-  const newCorrectKey = shuffledEntries.findIndex(([, value]) => value === originalCorrectValue);
-  const newCorrectAnswer = newCorrectKey !== -1 ? choiceKeys[newCorrectKey] : question.correct_answer;
-
-  return {
-    question: {
-      ...question,
-      choices: newChoices,
-      correct_answer: newCorrectAnswer
-    },
-    mapping
-  };
+  return { question: shuffleExamChoices([question]).items[0], mapping: {} };
 }
 
 /**
@@ -272,10 +241,7 @@ export async function generateTestVersions(
 
     // Shuffle answer choices if enabled
     if (config.shuffle_choices) {
-      versionQuestions = versionQuestions.map(q => {
-        const { question } = shuffleChoices(q);
-        return question;
-      });
+      versionQuestions = shuffleExamChoices(versionQuestions).items;
     }
 
     // Create answer key
