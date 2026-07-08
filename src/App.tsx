@@ -37,6 +37,10 @@ import TestAssembly from "./pages/TestAssembly";
 import { ProtectedRoute } from "./components/ProtectedRoute";
 import { AdminLayout } from "./components/layout/AdminLayout";
 import { TeacherLayout } from "./components/layout/TeacherLayout";
+import { ValidatorLayout } from "./layout/ValidatorLayout";
+import ValidatorDashboard from "./pages/validator/ValidatorDashboard";
+import ValidateTestPage from "./pages/validator/ValidateTestPage";
+import ValidatorHistory from "./pages/validator/ValidatorHistory";
 import NotFound from "./pages/NotFound";
 import { warmPrintAssets } from "./print/assets";
 
