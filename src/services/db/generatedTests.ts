@@ -122,8 +122,9 @@ export const GeneratedTests = {
       shuffle_questions: secured.shuffle_questions,
       shuffle_choices: secured.shuffle_choices,
       version_label: secured.version_label,
-      version_number: secured.version_number,
-      created_by: user.id
+      created_by: user.id,
+      content_hash: (secured as any).content_hash,
+      validation_status: 'pending_validation',
     };
 
     const { data, error } = await supabase
@@ -161,8 +162,9 @@ export const GeneratedTests = {
       shuffle_questions: secured.shuffle_questions,
       shuffle_choices: secured.shuffle_choices,
       version_label: secured.version_label,
-      version_number: secured.version_number,
-      created_by: user.id
+      created_by: user.id,
+      content_hash: (secured as any).content_hash,
+      validation_status: 'pending_validation',
     };
 
     const { data, error } = await supabase
@@ -203,6 +205,8 @@ export const GeneratedTests = {
         version_label: secured.version_label,
         version_number: secured.version_number,
         created_by: user.id,
+        content_hash: (secured as any).content_hash,
+        validation_status: 'pending_validation',
       };
     });
 
