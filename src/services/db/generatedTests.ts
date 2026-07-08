@@ -36,7 +36,8 @@ function applyChoiceRandomization<T extends { items: any; answer_key?: any }>(
   console.info(
     `[exam-security] choice randomization applied (n=${items.length}, attempts=${reshuffleAttempts}, dist=${JSON.stringify(distribution)})`,
   );
-  return { ...payload, items, answer_key: existing };
+  const contentHash = computeTestContentHash(items, existing);
+  return { ...payload, items, answer_key: existing, content_hash: contentHash } as any;
 }
 
 export interface GeneratedTest {
