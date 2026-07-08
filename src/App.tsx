@@ -138,7 +138,24 @@ const App = () => {
                   </ProtectedRoute>
                 } 
               />
-              
+
+              {/* Validator (Evaluator) Routes — accessible to validator + admin */}
+              <Route
+                path="/validator/*"
+                element={
+                  <ProtectedRoute allowedRoles={["validator", "admin"]}>
+                    <ValidatorLayout>
+                      <Routes>
+                        <Route index element={<Navigate to="/validator/pending" replace />} />
+                        <Route path="pending" element={<ValidatorDashboard />} />
+                        <Route path="review/:testId" element={<ValidateTestPage />} />
+                        <Route path="history" element={<ValidatorHistory />} />
+                      </Routes>
+                    </ValidatorLayout>
+                  </ProtectedRoute>
+                }
+              />
+
               {/* Catch-all redirect */}
               <Route path="*" element={<NotFound />} />
             </Routes>
