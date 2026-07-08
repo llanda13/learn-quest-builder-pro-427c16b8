@@ -134,6 +134,11 @@ export default function MyTests() {
           {tests.map((test) => (
             <Card key={test.id} className="hover:shadow-lg transition-shadow">
               <CardContent className="p-5 space-y-3">
+                <div className="flex justify-end">
+                  <Badge variant={STATUS_META[test.validation_status].variant}>
+                    {STATUS_META[test.validation_status].label}
+                  </Badge>
+                </div>
                 <div className="space-y-2 text-sm">
                   <div className="flex items-start gap-2">
                     <Building2 className="h-4 w-4 mt-0.5 shrink-0 text-muted-foreground" />
