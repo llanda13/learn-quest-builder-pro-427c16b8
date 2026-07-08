@@ -616,6 +616,7 @@ export type Database = {
       generated_tests: {
         Row: {
           answer_key: Json | null
+          content_hash: string | null
           course: string | null
           created_at: string
           created_by: string | null
@@ -635,6 +636,9 @@ export type Database = {
           time_limit: number | null
           title: string | null
           tos_id: string | null
+          validated_at: string | null
+          validated_by: string | null
+          validation_status: string
           version_label: string | null
           version_number: number | null
           watermark_data: Json | null
@@ -642,6 +646,7 @@ export type Database = {
         }
         Insert: {
           answer_key?: Json | null
+          content_hash?: string | null
           course?: string | null
           created_at?: string
           created_by?: string | null
@@ -661,6 +666,9 @@ export type Database = {
           time_limit?: number | null
           title?: string | null
           tos_id?: string | null
+          validated_at?: string | null
+          validated_by?: string | null
+          validation_status?: string
           version_label?: string | null
           version_number?: number | null
           watermark_data?: Json | null
@@ -668,6 +676,7 @@ export type Database = {
         }
         Update: {
           answer_key?: Json | null
+          content_hash?: string | null
           course?: string | null
           created_at?: string
           created_by?: string | null
@@ -687,6 +696,9 @@ export type Database = {
           time_limit?: number | null
           title?: string | null
           tos_id?: string | null
+          validated_at?: string | null
+          validated_by?: string | null
+          validation_status?: string
           version_label?: string | null
           version_number?: number | null
           watermark_data?: Json | null
@@ -1907,6 +1919,57 @@ export type Database = {
           year_section?: string | null
         }
         Relationships: []
+      }
+      test_validations: {
+        Row: {
+          comments: string | null
+          created_at: string
+          decision: string
+          generated_test_id: string
+          id: string
+          instrument_scores: Json
+          percentage_correctness: number
+          reused_from_test_id: string | null
+          validator_id: string
+        }
+        Insert: {
+          comments?: string | null
+          created_at?: string
+          decision: string
+          generated_test_id: string
+          id?: string
+          instrument_scores?: Json
+          percentage_correctness: number
+          reused_from_test_id?: string | null
+          validator_id: string
+        }
+        Update: {
+          comments?: string | null
+          created_at?: string
+          decision?: string
+          generated_test_id?: string
+          id?: string
+          instrument_scores?: Json
+          percentage_correctness?: number
+          reused_from_test_id?: string | null
+          validator_id?: string
+        }
+        Relationships: [
+          {
+            foreignKeyName: "test_validations_generated_test_id_fkey"
+            columns: ["generated_test_id"]
+            isOneToOne: false
+            referencedRelation: "generated_tests"
+            referencedColumns: ["id"]
+          },
+          {
+            foreignKeyName: "test_validations_reused_from_test_id_fkey"
+            columns: ["reused_from_test_id"]
+            isOneToOne: false
+            referencedRelation: "generated_tests"
+            referencedColumns: ["id"]
+          },
+        ]
       }
       test_versions: {
         Row: {
