@@ -37,6 +37,10 @@ import TestAssembly from "./pages/TestAssembly";
 import { ProtectedRoute } from "./components/ProtectedRoute";
 import { AdminLayout } from "./components/layout/AdminLayout";
 import { TeacherLayout } from "./components/layout/TeacherLayout";
+import { ValidatorLayout } from "./layout/ValidatorLayout";
+import ValidatorDashboard from "./pages/validator/ValidatorDashboard";
+import ValidateTestPage from "./pages/validator/ValidateTestPage";
+import ValidatorHistory from "./pages/validator/ValidatorHistory";
 import NotFound from "./pages/NotFound";
 import { warmPrintAssets } from "./print/assets";
 
@@ -134,7 +138,24 @@ const App = () => {
                   </ProtectedRoute>
                 } 
               />
-              
+
+              {/* Validator (Evaluator) Routes — accessible to validator + admin */}
+              <Route
+                path="/validator/*"
+                element={
+                  <ProtectedRoute allowedRoles={["validator", "admin"]}>
+                    <ValidatorLayout>
+                      <Routes>
+                        <Route index element={<Navigate to="/validator/pending" replace />} />
+                        <Route path="pending" element={<ValidatorDashboard />} />
+                        <Route path="review/:testId" element={<ValidateTestPage />} />
+                        <Route path="history" element={<ValidatorHistory />} />
+                      </Routes>
+                    </ValidatorLayout>
+                  </ProtectedRoute>
+                }
+              />
+
               {/* Catch-all redirect */}
               <Route path="*" element={<NotFound />} />
             </Routes>

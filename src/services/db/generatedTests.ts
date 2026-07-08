@@ -1,6 +1,7 @@
 import { supabase } from "@/integrations/supabase/client";
 import { recordExamUsage } from "@/services/rotation/rotationEngine";
 import { shuffleExamChoices } from "@/utils/shuffleExamChoices";
+import { computeTestContentHash } from "@/utils/testContentHash";
 
 /**
  * Apply Fisher-Yates choice randomization + answer-key recalculation as the
@@ -35,7 +36,8 @@ function applyChoiceRandomization<T extends { items: any; answer_key?: any }>(
   console.info(
     `[exam-security] choice randomization applied (n=${items.length}, attempts=${reshuffleAttempts}, dist=${JSON.stringify(distribution)})`,
   );
-  return { ...payload, items, answer_key: existing };
+  const contentHash = computeTestContentHash(items, existing);
+  return { ...payload, items, answer_key: existing, content_hash: contentHash } as any;
 }
 
 export interface GeneratedTest {
@@ -120,8 +122,9 @@ export const GeneratedTests = {
       shuffle_questions: secured.shuffle_questions,
       shuffle_choices: secured.shuffle_choices,
       version_label: secured.version_label,
-      version_number: secured.version_number,
-      created_by: user.id
+      created_by: user.id,
+      content_hash: (secured as any).content_hash,
+      validation_status: 'pending_validation',
     };
 
     const { data, error } = await supabase
@@ -159,8 +162,9 @@ export const GeneratedTests = {
       shuffle_questions: secured.shuffle_questions,
       shuffle_choices: secured.shuffle_choices,
       version_label: secured.version_label,
-      version_number: secured.version_number,
-      created_by: user.id
+      created_by: user.id,
+      content_hash: (secured as any).content_hash,
+      validation_status: 'pending_validation',
     };
 
     const { data, error } = await supabase
@@ -201,6 +205,8 @@ export const GeneratedTests = {
         version_label: secured.version_label,
         version_number: secured.version_number,
         created_by: user.id,
+        content_hash: (secured as any).content_hash,
+        validation_status: 'pending_validation',
       };
     });
 

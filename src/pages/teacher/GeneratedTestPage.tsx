@@ -144,6 +144,15 @@ export default function GeneratedTestPage() {
 
   const handlePrint = async () => {
     if (!test) return;
+    if (test.validation_status !== "validated") {
+      toast({
+        title: "Awaiting expert validation",
+        description:
+          "This questionnaire cannot be printed until an Evaluator approves it.",
+        variant: "destructive",
+      });
+      return;
+    }
     const t0 = performance.now();
     // Build a fresh model at click time so the current showAnswerKey flag is
     // guaranteed to flow through — Print and Export must stay in sync.
@@ -159,6 +168,15 @@ export default function GeneratedTestPage() {
 
   const handleExport = async () => {
     if (!test) return;
+    if (test.validation_status !== "validated") {
+      toast({
+        title: "Awaiting expert validation",
+        description:
+          "This questionnaire cannot be exported until an Evaluator approves it.",
+        variant: "destructive",
+      });
+      return;
+    }
     const t0 = performance.now();
     // Build a fresh model at click time using the exact same inputs as Print
     // so both outputs are identical when "Show Answer Key" is toggled.
@@ -301,6 +319,25 @@ export default function GeneratedTestPage() {
         <div className="text-xs text-muted-foreground text-center">Refining test in background…</div>
       )}
 
+      {/* Expert Validation status banner */}
+      {test.validation_status !== "validated" && (
+        <div
+          className={
+            "rounded-md border p-3 text-sm " +
+            (test.validation_status === "revision_requested"
+              ? "border-destructive/50 bg-destructive/10 text-destructive"
+              : "border-amber-500/50 bg-amber-500/10 text-amber-900 dark:text-amber-200")
+          }
+        >
+          <strong>
+            {test.validation_status === "revision_requested"
+              ? "Revision requested by Evaluator."
+              : "Awaiting Expert Validation."}
+          </strong>{" "}
+          Printing and PDF export are locked until this questionnaire is approved by an Evaluator.
+        </div>
+      )}
+
       {/* Action Buttons */}
       <div className="flex items-center justify-between">
         <Button variant="outline" onClick={handleBack}>
@@ -312,11 +349,20 @@ export default function GeneratedTestPage() {
             <Key className="w-4 h-4 mr-2" />
             {showAnswerKey ? "Hide" : "Show"} Answer Key
           </Button>
-          <Button variant="outline" onClick={handlePrint}>
+          <Button
+            variant="outline"
+            onClick={handlePrint}
+            disabled={test.validation_status !== "validated"}
+            title={test.validation_status !== "validated" ? "Awaiting expert validation" : undefined}
+          >
             <Printer className="w-4 h-4 mr-2" />
             Print
           </Button>
-          <Button onClick={handleExport}>
+          <Button
+            onClick={handleExport}
+            disabled={test.validation_status !== "validated"}
+            title={test.validation_status !== "validated" ? "Awaiting expert validation" : undefined}
+          >
             <Download className="w-4 h-4 mr-2" />
             Export PDF
           </Button>
