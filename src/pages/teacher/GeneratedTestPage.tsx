@@ -144,6 +144,15 @@ export default function GeneratedTestPage() {
 
   const handlePrint = async () => {
     if (!test) return;
+    if (test.validation_status !== "validated") {
+      toast({
+        title: "Awaiting expert validation",
+        description:
+          "This questionnaire cannot be printed until an Evaluator approves it.",
+        variant: "destructive",
+      });
+      return;
+    }
     const t0 = performance.now();
     // Build a fresh model at click time so the current showAnswerKey flag is
     // guaranteed to flow through — Print and Export must stay in sync.
