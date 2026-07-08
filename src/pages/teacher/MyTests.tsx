@@ -18,7 +18,14 @@ interface GeneratedTest {
   points_per_question: number | null;
   created_at: string;
   items: any;
+  validation_status: 'pending_validation' | 'validated' | 'revision_requested';
 }
+
+const STATUS_META: Record<GeneratedTest['validation_status'], { label: string; variant: 'default' | 'secondary' | 'destructive' | 'outline' }> = {
+  pending_validation: { label: 'Pending Validation', variant: 'secondary' },
+  validated: { label: 'Validated', variant: 'default' },
+  revision_requested: { label: 'Revision Requested', variant: 'destructive' },
+};
 
 export default function MyTests() {
   const [tests, setTests] = useState<GeneratedTest[]>([]);
@@ -39,7 +46,7 @@ export default function MyTests() {
       const [testsRes, profileRes] = await Promise.all([
         supabase
           .from('generated_tests')
-          .select('id, title, subject, course, exam_period, school_year, semester, points_per_question, created_at, items')
+          .select('id, title, subject, course, exam_period, school_year, semester, points_per_question, created_at, items, validation_status')
           .eq('created_by', user.id)
           .order('created_at', { ascending: false }),
         supabase
@@ -62,7 +69,8 @@ export default function MyTests() {
         semester: (test as any).semester ?? null,
         points_per_question: test.points_per_question,
         created_at: test.created_at || '',
-        items: test.items
+        items: test.items,
+        validation_status: ((test as any).validation_status ?? 'pending_validation') as GeneratedTest['validation_status'],
       }));
 
       setTests(mappedTests);
