@@ -13,6 +13,7 @@ import {
   Brain,
   Upload,
   Building2,
+  ClipboardCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
@@ -48,6 +49,12 @@ const adminMenuItems = [
     href: "/admin/ai-assistant", 
     icon: Brain,
     description: "Academic AI helper" 
+  },
+  { 
+    title: "Expert Validation", 
+    href: "/validator/pending", 
+    icon: ClipboardCheck,
+    description: "Review generated TQs" 
   },
   { 
     title: "Department Officers", 
