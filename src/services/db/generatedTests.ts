@@ -1,6 +1,7 @@
 import { supabase } from "@/integrations/supabase/client";
 import { recordExamUsage } from "@/services/rotation/rotationEngine";
 import { shuffleExamChoices } from "@/utils/shuffleExamChoices";
+import { computeTestContentHash } from "@/utils/testContentHash";
 
 /**
  * Apply Fisher-Yates choice randomization + answer-key recalculation as the
