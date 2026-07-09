@@ -13,7 +13,8 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
-import { Eye, ClipboardList } from "lucide-react";
+import { useUserRole } from "@/hooks/useUserRole";
+import { Eye, ClipboardList, ArrowLeft } from "lucide-react";
 
 export default function ValidatorDashboard() {
   const navigate = useNavigate();
