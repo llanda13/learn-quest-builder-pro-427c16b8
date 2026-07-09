@@ -19,6 +19,7 @@ import { Eye, ClipboardList, ArrowLeft } from "lucide-react";
 export default function ValidatorDashboard() {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { isAdmin } = useUserRole();
   const [rows, setRows] = useState<PendingTestRow[]>([]);
   const [loading, setLoading] = useState(true);
 
