@@ -13,11 +13,13 @@ import {
   TableRow,
 } from "@/components/ui/table";
 import { useToast } from "@/hooks/use-toast";
-import { Eye, ClipboardList } from "lucide-react";
+import { useUserRole } from "@/hooks/useUserRole";
+import { Eye, ClipboardList, ArrowLeft } from "lucide-react";
 
 export default function ValidatorDashboard() {
   const navigate = useNavigate();
   const { toast } = useToast();
+  const { isAdmin } = useUserRole();
   const [rows, setRows] = useState<PendingTestRow[]>([]);
   const [loading, setLoading] = useState(true);
 
@@ -49,15 +51,26 @@ export default function ValidatorDashboard() {
 
   return (
     <div className="container mx-auto py-8 px-4 space-y-6">
-      <div className="flex items-center gap-3">
-        <ClipboardList className="w-6 h-6 text-primary" />
-        <div>
-          <h1 className="text-3xl font-bold">Pending Expert Validation</h1>
-          <p className="text-sm text-muted-foreground">
-            Each generated questionnaire is reviewed independently. Approve to make it
-            eligible for printing and export.
-          </p>
+      <div className="flex items-center justify-between gap-4">
+        <div className="flex items-center gap-3">
+          <ClipboardList className="w-6 h-6 text-primary" />
+          <div>
+            <h1 className="text-3xl font-bold">Pending Expert Validation</h1>
+            <p className="text-sm text-muted-foreground">
+              Each generated questionnaire is reviewed independently. Approve to make it
+              eligible for printing and export.
+            </p>
+          </div>
         </div>
+        {isAdmin && (
+          <Button
+            variant="outline"
+            onClick={() => navigate("/admin/dashboard")}
+          >
+            <ArrowLeft className="w-4 h-4 mr-2" />
+            Admin Dashboard
+          </Button>
+        )}
       </div>
 
       <Card>
