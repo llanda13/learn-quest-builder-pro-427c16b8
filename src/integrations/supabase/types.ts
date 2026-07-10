@@ -1922,37 +1922,55 @@ export type Database = {
       }
       test_validations: {
         Row: {
+          bloom_alignment: string | null
           comments: string | null
           created_at: string
           decision: string
+          general_comments: string | null
           generated_test_id: string
           id: string
           instrument_scores: Json
+          interpretation: string | null
+          items_for_revision: string | null
+          likert_scores: Json
           percentage_correctness: number
           reused_from_test_id: string | null
           validator_id: string
+          weighted_mean: number | null
         }
         Insert: {
+          bloom_alignment?: string | null
           comments?: string | null
           created_at?: string
           decision: string
+          general_comments?: string | null
           generated_test_id: string
           id?: string
           instrument_scores?: Json
+          interpretation?: string | null
+          items_for_revision?: string | null
+          likert_scores?: Json
           percentage_correctness: number
           reused_from_test_id?: string | null
           validator_id: string
+          weighted_mean?: number | null
         }
         Update: {
+          bloom_alignment?: string | null
           comments?: string | null
           created_at?: string
           decision?: string
+          general_comments?: string | null
           generated_test_id?: string
           id?: string
           instrument_scores?: Json
+          interpretation?: string | null
+          items_for_revision?: string | null
+          likert_scores?: Json
           percentage_correctness?: number
           reused_from_test_id?: string | null
           validator_id?: string
+          weighted_mean?: number | null
         }
         Relationships: [
           {
