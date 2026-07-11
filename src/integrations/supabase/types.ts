@@ -1924,13 +1924,18 @@ export type Database = {
         Row: {
           bloom_alignment: string | null
           comments: string | null
+          content_validity_index: number | null
           created_at: string
           decision: string
+          expert_experience: string | null
+          expert_full_name: string | null
+          expert_position: string | null
           general_comments: string | null
           generated_test_id: string
           id: string
           instrument_scores: Json
           interpretation: string | null
+          item_alignment_matrix: Json | null
           items_for_revision: string | null
           likert_scores: Json
           percentage_correctness: number
@@ -1941,13 +1946,18 @@ export type Database = {
         Insert: {
           bloom_alignment?: string | null
           comments?: string | null
+          content_validity_index?: number | null
           created_at?: string
           decision: string
+          expert_experience?: string | null
+          expert_full_name?: string | null
+          expert_position?: string | null
           general_comments?: string | null
           generated_test_id: string
           id?: string
           instrument_scores?: Json
           interpretation?: string | null
+          item_alignment_matrix?: Json | null
           items_for_revision?: string | null
           likert_scores?: Json
           percentage_correctness: number
@@ -1958,13 +1968,18 @@ export type Database = {
         Update: {
           bloom_alignment?: string | null
           comments?: string | null
+          content_validity_index?: number | null
           created_at?: string
           decision?: string
+          expert_experience?: string | null
+          expert_full_name?: string | null
+          expert_position?: string | null
           general_comments?: string | null
           generated_test_id?: string
           id?: string
           instrument_scores?: Json
           interpretation?: string | null
+          item_alignment_matrix?: Json | null
           items_for_revision?: string | null
           likert_scores?: Json
           percentage_correctness?: number

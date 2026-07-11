@@ -91,16 +91,19 @@ export const TestValidations = {
     weighted_mean?: number;
     interpretation?: string;
     likert_scores?: Record<string, number>;
-    bloom_alignment?: string;
     items_for_revision?: string;
     general_comments?: string;
+    expert_full_name?: string;
+    expert_position?: string;
+    expert_experience?: string;
+    item_alignment_matrix?: Array<{ index: number; verdict: string }>;
+    content_validity_index?: number;
   }): Promise<TestValidation> {
     const {
       data: { user },
     } = await supabase.auth.getUser();
     if (!user) throw new Error("Not authenticated");
 
-    // Preserve legacy `comments` + `instrument_scores` columns for backward compatibility
     const combinedComments = [
       payload.items_for_revision
         ? `Specific Items for Revision:\n${payload.items_for_revision}`
@@ -122,16 +125,26 @@ export const TestValidations = {
         comments: combinedComments || null,
         instrument_scores: {
           likert_scores: payload.likert_scores ?? {},
-          bloom_alignment: payload.bloom_alignment ?? null,
           weighted_mean: payload.weighted_mean ?? null,
           interpretation: payload.interpretation ?? null,
+          content_validity_index: payload.content_validity_index ?? null,
+          expert_profile: {
+            full_name: payload.expert_full_name ?? null,
+            position: payload.expert_position ?? null,
+            experience: payload.expert_experience ?? null,
+          },
+          item_alignment_matrix: payload.item_alignment_matrix ?? [],
         },
         likert_scores: payload.likert_scores ?? {},
-        bloom_alignment: payload.bloom_alignment ?? null,
         weighted_mean: payload.weighted_mean ?? null,
         interpretation: payload.interpretation ?? null,
         items_for_revision: payload.items_for_revision ?? null,
         general_comments: payload.general_comments ?? null,
+        expert_full_name: payload.expert_full_name ?? null,
+        expert_position: payload.expert_position ?? null,
+        expert_experience: payload.expert_experience ?? null,
+        item_alignment_matrix: payload.item_alignment_matrix ?? [],
+        content_validity_index: payload.content_validity_index ?? null,
       } as any)
       .select()
       .single();
