@@ -367,8 +367,23 @@ export default function GeneratedTestPage() {
             <Download className="w-4 h-4 mr-2" />
             Export PDF
           </Button>
-        </div>
       </div>
+
+      {/* Sticky TOS reference — always visible while reviewing the questionnaire */}
+      <div className="sticky top-0 z-30 -mx-4 px-4 py-3 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 border-b screen-only">
+        <TOSReferencePanel
+          title={test.title}
+          course={test.course}
+          subject={test.subject}
+          examPeriod={test.exam_period}
+          schoolYear={test.school_year}
+          semester={test.semester}
+          totalItems={items.length}
+          items={items as any}
+        />
+      </div>
+
+
 
       {/* Exam Paper */}
       <Card className="print:shadow-none print:border-none" id="test-content">
