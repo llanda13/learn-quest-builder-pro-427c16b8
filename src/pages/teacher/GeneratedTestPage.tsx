@@ -13,6 +13,7 @@ import { useTestAutoRepair } from "@/hooks/useTestAutoRepair";
 import { useExamRenderModel, buildExamRenderModel } from "@/print/useExamRenderModel";
 import { printExam } from "@/print/printExam";
 import { exportExamPdf } from "@/print/exportExamPdf";
+import { TOSReferencePanel } from "@/components/TOSReferencePanel";
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
