@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { ArrowLeft, CheckCircle2, RotateCcw } from "lucide-react";
+import { TOSReferencePanel } from "@/components/TOSReferencePanel";
 
 // Section 2 — Core Quality Ratings (6 criteria, 4-point Likert)
 const LIKERT_ITEMS: { key: string; label: string; description: string }[] = [
@@ -254,30 +255,39 @@ export default function ValidateTestPage() {
   }
 
   return (
-    <div className="container mx-auto py-8 px-4 space-y-6 max-w-5xl">
-      <div className="flex items-center justify-between">
-        <Button variant="outline" onClick={() => navigate("/validator/pending")}>
-          <ArrowLeft className="w-4 h-4 mr-2" />
-          Back to Pending
-        </Button>
-        <Badge variant="secondary">Status: {test.validation_status}</Badge>
+    <div className="container mx-auto px-4 max-w-5xl">
+      {/* Fixed / sticky TOS reference panel */}
+      <div className="sticky top-0 z-30 -mx-4 px-4 pt-4 pb-3 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 border-b">
+        <div className="flex items-center justify-between mb-3">
+          <Button variant="outline" size="sm" onClick={() => navigate("/validator/pending")}>
+            <ArrowLeft className="w-4 h-4 mr-2" />
+            Back to Pending
+          </Button>
+          <Badge variant="secondary">Status: {test.validation_status}</Badge>
+        </div>
+        <TOSReferencePanel
+          title={test.title}
+          course={test.course}
+          subject={test.subject}
+          examPeriod={test.exam_period}
+          schoolYear={test.school_year}
+          semester={test.semester}
+          totalItems={items.length}
+          items={items}
+        />
       </div>
 
-      {/* Header */}
+      {/* Scrollable evaluation area */}
+      <div className="py-6 space-y-6">
       <Card>
         <CardHeader>
-          <CardTitle>Expert Validation Instrument for AI-Generated Test Questions (TQ)</CardTitle>
-          <div className="text-sm text-muted-foreground flex flex-wrap gap-x-4 gap-y-1">
-            <span>Title: {test.title || "Untitled Questionnaire"}</span>
-            <span>Subject: {test.course ? `${test.course} — ` : ""}{test.subject || "—"}</span>
-            <span>Exam: {test.exam_period || "—"}</span>
-            <span>SY: {test.school_year || "—"}</span>
-            <span>Semester: {test.semester || "—"}</span>
-            <span>Items: {items.length}</span>
-          </div>
+          <CardTitle>Generated Test Questionnaire (TQ)</CardTitle>
+          <p className="text-sm text-muted-foreground">
+            Review each item against the TOS blueprint pinned above.
+          </p>
         </CardHeader>
         <CardContent>
-          <div className="max-h-[420px] overflow-y-auto space-y-3 pr-2 border rounded p-3 bg-muted/30">
+          <div className="space-y-3 pr-2 border rounded p-3 bg-muted/30">
             {items.map((it: any, i: number) => {
               const choices = it?.choices;
               return (
@@ -554,6 +564,7 @@ export default function ValidateTestPage() {
           </div>
         </CardContent>
       </Card>
+      </div>
     </div>
   );
 }

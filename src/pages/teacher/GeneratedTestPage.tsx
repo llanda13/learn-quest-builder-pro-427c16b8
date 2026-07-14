@@ -13,6 +13,7 @@ import { useTestAutoRepair } from "@/hooks/useTestAutoRepair";
 import { useExamRenderModel, buildExamRenderModel } from "@/print/useExamRenderModel";
 import { printExam } from "@/print/printExam";
 import { exportExamPdf } from "@/print/exportExamPdf";
+import { TOSReferencePanel } from "@/components/TOSReferencePanel";
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
@@ -368,6 +369,24 @@ export default function GeneratedTestPage() {
           </Button>
         </div>
       </div>
+
+
+
+      {/* Sticky TOS reference — always visible while reviewing the questionnaire */}
+      <div className="sticky top-0 z-30 -mx-4 px-4 py-3 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 border-b screen-only">
+        <TOSReferencePanel
+          title={test.title}
+          course={test.course}
+          subject={test.subject}
+          examPeriod={test.exam_period}
+          schoolYear={test.school_year}
+          semester={test.semester}
+          totalItems={items.length}
+          items={items as any}
+        />
+      </div>
+
+
 
       {/* Exam Paper */}
       <Card className="print:shadow-none print:border-none" id="test-content">
