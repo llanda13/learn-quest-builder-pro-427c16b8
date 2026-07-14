@@ -564,6 +564,7 @@ export default function ValidateTestPage() {
           </div>
         </CardContent>
       </Card>
+      </div>
     </div>
   );
 }
