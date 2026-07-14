@@ -367,7 +367,10 @@ export default function GeneratedTestPage() {
             <Download className="w-4 h-4 mr-2" />
             Export PDF
           </Button>
+        </div>
       </div>
+
+
 
       {/* Sticky TOS reference — always visible while reviewing the questionnaire */}
       <div className="sticky top-0 z-30 -mx-4 px-4 py-3 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 border-b screen-only">
