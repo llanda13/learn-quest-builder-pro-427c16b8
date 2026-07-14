@@ -19,6 +19,7 @@ import {
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
 import { ArrowLeft, CheckCircle2, RotateCcw } from "lucide-react";
+import { TOSReferencePanel } from "@/components/TOSReferencePanel";
 
 // Section 2 — Core Quality Ratings (6 criteria, 4-point Likert)
 const LIKERT_ITEMS: { key: string; label: string; description: string }[] = [
