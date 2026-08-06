@@ -341,13 +341,16 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
         course_codes: string[] | null;
       }>;
 
-      // A subject is "shared/minor" when the database says so, not by code prefix.
-      const minor = rows.some(r => ['ge', 'pe', 'nstp', 'minor'].includes((r.subject_type ?? '').toLowerCase()));
-      setIsMinorSubject(minor);
+      // Classification from the central subject database is the single source of
+      // truth. Shared subjects (Minor / GE / PE / NSTP) are always "BSIT & BSIS".
+      const SHARED_TYPES = ['ge', 'pe', 'nstp', 'minor'];
+      const types = rows.map(r => (r.subject_type ?? '').toLowerCase());
+      const shared = types.some(t => SHARED_TYPES.includes(t));
+      setIsMinorSubject(shared);
 
       const description = rows.find(r => r.description?.trim())?.description ?? undefined;
 
-      // Union of every program that offers this subject, stored in the DB.
+      // Programs offering this subject, as stored in the database.
       const programs = Array.from(
         new Set(
           rows
@@ -357,9 +360,15 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
         )
       ).sort();
 
+      const course = shared
+        ? 'BSIT & BSIS'
+        : programs.length > 0
+          ? programs.join(' & ')
+          : '';
+
       if (description) setValue('description', description, { shouldDirty: true, shouldValidate: true });
-      if (programs.length > 0) {
-        setValue('course', programs.join(' & '), { shouldDirty: true, shouldValidate: true });
+      if (course) {
+        setValue('course', course, { shouldDirty: true, shouldValidate: true });
       }
 
       setSubjectLookupStatus('found');
