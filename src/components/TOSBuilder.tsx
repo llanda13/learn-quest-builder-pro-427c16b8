@@ -939,27 +939,25 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
 
               <div>
                 <Label htmlFor="course">
-                  Course{' '}
-                  <span className="text-xs text-muted-foreground">
-                    {isMinorSubject ? '(manual — minor/general subject)' : '(auto)'}
-                  </span>
+                  Course <span className="text-xs text-muted-foreground">(auto)</span>
                 </Label>
                 <Input
                   id="course"
                   {...register("course")}
-                  placeholder={isMinorSubject ? 'Enter course (e.g., BSIS, BSIT)' : 'Auto-filled from Subject No.'}
-                  readOnly={!isMinorSubject}
-                  className={isMinorSubject ? '' : 'bg-muted/40'}
+                  placeholder="Auto-filled from Subject No."
+                  readOnly
+                  className="bg-muted/40"
                 />
                 {isMinorSubject && (
                   <p className="text-xs text-muted-foreground mt-1">
-                    GE / PE / NSTP subjects are taken across courses — please select the course manually.
+                    Shared subject — course(s) taken from the central subject database.
                   </p>
                 )}
                 {errors.course && (
                   <p className="text-sm text-destructive mt-1">{errors.course.message}</p>
                 )}
               </div>
+
 
 
               <div className="md:col-span-2">
