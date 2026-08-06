@@ -82,32 +82,38 @@ export type Database = {
       academic_subjects: {
         Row: {
           code: string
+          course_codes: string[]
           created_at: string
           deleted: boolean
           deleted_at: string | null
           description: string
           id: string
           specialization_id: string
+          subject_type: Database["public"]["Enums"]["subject_type"]
           updated_at: string
         }
         Insert: {
           code: string
+          course_codes?: string[]
           created_at?: string
           deleted?: boolean
           deleted_at?: string | null
           description: string
           id?: string
           specialization_id: string
+          subject_type?: Database["public"]["Enums"]["subject_type"]
           updated_at?: string
         }
         Update: {
           code?: string
+          course_codes?: string[]
           created_at?: string
           deleted?: boolean
           deleted_at?: string | null
           description?: string
           id?: string
           specialization_id?: string
+          subject_type?: Database["public"]["Enums"]["subject_type"]
           updated_at?: string
         }
         Relationships: [
@@ -2459,6 +2465,7 @@ export type Database = {
         | "create"
       difficulty_level: "easy" | "medium" | "hard"
       question_type: "multiple_choice" | "true_false" | "essay" | "fill_blank"
+      subject_type: "major" | "minor" | "ge" | "pe" | "nstp"
       user_role: "admin" | "teacher"
     }
     CompositeTypes: {
@@ -2598,6 +2605,7 @@ export const Constants = {
       ],
       difficulty_level: ["easy", "medium", "hard"],
       question_type: ["multiple_choice", "true_false", "essay", "fill_blank"],
+      subject_type: ["major", "minor", "ge", "pe", "nstp"],
       user_role: ["admin", "teacher"],
     },
   },
