@@ -373,16 +373,19 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
   const watchedTotalItems = watch("total_items");
   const watchedSubjectNo = watch("subject_no");
 
-  // Keep the minor-subject flag in sync with the current Subject No so the
-  // Course field becomes editable for GE / PE / NSTP regardless of how the
-  // value was loaded (persisted draft, template reuse, file upload, etc.).
+  // Re-run the database lookup whenever the Subject No changes (persisted draft,
+  // template reuse, file upload, manual typing) so Description + Course always
+  // come from the central subject database instead of a prefix guess.
   useEffect(() => {
     if (typeof watchedSubjectNo === 'string' && watchedSubjectNo.trim()) {
-      setIsMinorSubject(isMinorSubjectCode(watchedSubjectNo));
+      lookupSubject(watchedSubjectNo);
     } else {
       setIsMinorSubject(false);
+      setSubjectLookupStatus('idle');
     }
+    // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [watchedSubjectNo]);
+
 
   // ─── Clear / New TOS ─────────────────────────────────────────────────────
   // Wipes the entire builder back to a fresh state without a page refresh.
