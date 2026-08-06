@@ -358,7 +358,7 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
             .map(c => c?.trim().toUpperCase())
             .filter(Boolean) as string[]
         )
-      ).sort();
+      ).sort((a, b) => (a === 'BSIT' ? -1 : b === 'BSIT' ? 1 : a.localeCompare(b)));
 
       const course = shared
         ? 'BSIT & BSIS'
