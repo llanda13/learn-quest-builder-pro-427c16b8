@@ -319,45 +319,47 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
       setIsMinorSubject(false);
       return;
     }
-    const minor = isMinorSubjectCode(code);
-    setIsMinorSubject(minor);
     setSubjectLookupStatus('looking');
     try {
+      // Fetch ALL rows matching the code — the database is the single source of
+      // truth for both the description and the applicable program(s).
       const { data, error } = await supabase
         .from('academic_subjects')
-        .select('description, specialization_id, academic_specializations(name)')
+        .select('description, subject_type, course_codes')
         .ilike('code', code)
-        .eq('deleted', false)
-        .maybeSingle();
+        .eq('deleted', false);
 
-      if (error || !data) {
+      if (error || !data || data.length === 0) {
         setSubjectLookupStatus('missing');
+        setIsMinorSubject(false);
         return;
       }
 
-      const description = (data as any).description as string | undefined;
-      const specName = (data as any).academic_specializations?.name as string | undefined;
-      // Map specialization code (e.g., "IT", "IS", "EMC", "CS") to the full
-      // program/course code (e.g., "BSIT", "BSIS"). If the specialization name
-      // is already a full program code (starts with "BS"), use it as-is.
-      const toProgramCode = (s?: string): string | undefined => {
-        if (!s) return undefined;
-        const trimmed = s.trim();
-        if (!trimmed) return undefined;
-        if (/^BS/i.test(trimmed)) return trimmed.toUpperCase();
-        return `BS${trimmed.toUpperCase()}`;
-      };
-      const courseName = toProgramCode(specName);
+      const rows = data as Array<{
+        description: string | null;
+        subject_type: string | null;
+        course_codes: string[] | null;
+      }>;
+
+      // A subject is "shared/minor" when the database says so, not by code prefix.
+      const minor = rows.some(r => ['ge', 'pe', 'nstp', 'minor'].includes((r.subject_type ?? '').toLowerCase()));
+      setIsMinorSubject(minor);
+
+      const description = rows.find(r => r.description?.trim())?.description ?? undefined;
+
+      // Union of every program that offers this subject, stored in the DB.
+      const programs = Array.from(
+        new Set(
+          rows
+            .flatMap(r => r.course_codes ?? [])
+            .map(c => c?.trim().toUpperCase())
+            .filter(Boolean) as string[]
+        )
+      ).sort();
 
       if (description) setValue('description', description, { shouldDirty: true, shouldValidate: true });
-      // Only auto-fill Course for MAJOR subjects. Minor/general subjects (GE, PE,
-      // NSTP) are taken across courses, so the teacher selects the Course manually.
-      if (!minor && courseName) {
-        setValue('course', courseName, { shouldDirty: true, shouldValidate: true });
-      } else if (minor) {
-        // Clear any stale auto-filled value so the teacher's manual input is preserved.
-        const current = (form.getValues('course') as string | undefined) ?? '';
-        if (current === courseName) setValue('course', '', { shouldDirty: true });
+      if (programs.length > 0) {
+        setValue('course', programs.join(' & '), { shouldDirty: true, shouldValidate: true });
       }
 
       setSubjectLookupStatus('found');
@@ -366,6 +368,7 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
       setSubjectLookupStatus('missing');
     }
   };
+
 
   const watchedTotalItems = watch("total_items");
   const watchedSubjectNo = watch("subject_no");
