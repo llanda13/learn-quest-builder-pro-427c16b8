@@ -309,9 +309,13 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
     })();
   }, [user?.id, setValue, form]);
 
-  // ─── Subject lookup: when the user enters/changes Subject No, fetch the
-  // matching subject record from the centralized Subjects database and
-  // auto-fill Subject Description + Course. Case-insensitive code match.
+  // ─── Subject lookup: ONE retrieval path for every subject type.
+  // Step 1: find the record(s) in the central subjects table by code (no
+  // subject_type filtering at all). Step 2: apply the course mapping based on
+  // the classification stored on the retrieved record.
+  const normalizeCode = (v: string) =>
+    v.toUpperCase().replace(/[\s._-]+/g, '').trim();
+
   const lookupSubject = async (rawCode: string) => {
     const code = rawCode.trim();
     if (!code) {
@@ -321,28 +325,57 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
     }
     setSubjectLookupStatus('looking');
     try {
-      // Fetch ALL rows matching the code — the database is the single source of
-      // truth for both the description and the applicable program(s).
-      const { data, error } = await supabase
-        .from('academic_subjects')
-        .select('description, subject_type, course_codes')
-        .ilike('code', code)
-        .eq('deleted', false);
+      const norm = normalizeCode(code);
+      const alpha = (norm.match(/^[A-Z]+/) ?? [''])[0];
 
-      if (error || !data || data.length === 0) {
+      // Single retrieval: pull every candidate sharing the alphabetic prefix
+      // (or, if none, a broad contains match) and resolve client-side so
+      // spacing variants like "ITPC100" / "ITPC 100" both match.
+      let query = supabase
+        .from('academic_subjects')
+        .select('code, description, subject_type, course_codes')
+        .eq('deleted', false);
+      query = alpha ? query.ilike('code', `${alpha}%`) : query.ilike('code', `%${code}%`);
+      const { data, error } = await query;
+
+      if (error) {
+        console.warn('Subject lookup failed:', error);
         setSubjectLookupStatus('missing');
         setIsMinorSubject(false);
         return;
       }
 
-      const rows = data as Array<{
+      const candidates = (data ?? []) as Array<{
+        code: string;
         description: string | null;
         subject_type: string | null;
         course_codes: string[] | null;
       }>;
 
-      // Classification from the central subject database is the single source of
-      // truth. Shared subjects (Minor / GE / PE / NSTP) are always "BSIT & BSIS".
+      // Exact (normalized) match first, then prefix match for partial entries.
+      let rows = candidates.filter(r => normalizeCode(r.code ?? '') === norm);
+      if (rows.length === 0) {
+        rows = candidates.filter(r => normalizeCode(r.code ?? '').startsWith(norm));
+      }
+      if (rows.length === 0) {
+        // Fall back to a broad contains search before declaring "not found".
+        const { data: wide } = await supabase
+          .from('academic_subjects')
+          .select('code, description, subject_type, course_codes')
+          .eq('deleted', false)
+          .ilike('code', `%${code.replace(/\s+/g, '%')}%`);
+        rows = ((wide ?? []) as typeof candidates).filter(
+          r => normalizeCode(r.code ?? '').startsWith(norm) || normalizeCode(r.code ?? '') === norm
+        );
+      }
+
+      if (rows.length === 0) {
+        setSubjectLookupStatus('missing');
+        setIsMinorSubject(false);
+        return;
+      }
+
+      // Classification from the retrieved record is the single source of truth.
       const SHARED_TYPES = ['ge', 'pe', 'nstp', 'minor'];
       const types = rows.map(r => (r.subject_type ?? '').toLowerCase());
       const shared = types.some(t => SHARED_TYPES.includes(t));
@@ -350,7 +383,6 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
 
       const description = rows.find(r => r.description?.trim())?.description ?? undefined;
 
-      // Programs offering this subject, as stored in the database.
       const programs = Array.from(
         new Set(
           rows
@@ -377,6 +409,7 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
       setSubjectLookupStatus('missing');
     }
   };
+
 
 
   const watchedTotalItems = watch("total_items");
