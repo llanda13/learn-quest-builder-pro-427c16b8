@@ -322,6 +322,7 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
     description: string | null;
     subject_type: string | null;
     course_codes: string[] | null;
+    specialization: string | null;
   };
 
   const subjectCacheRef = useRef<SubjectRow[] | null>(null);
@@ -330,13 +331,20 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
     if (subjectCacheRef.current) return subjectCacheRef.current;
     const { data, error } = await supabase
       .from('academic_subjects')
-      .select('code, description, subject_type, course_codes')
+      .select('code, description, subject_type, course_codes, academic_specializations(name)')
       .eq('deleted', false)
       .limit(5000);
     if (error) throw error;
-    subjectCacheRef.current = (data ?? []) as SubjectRow[];
+    subjectCacheRef.current = ((data ?? []) as any[]).map((r) => ({
+      code: r.code,
+      description: r.description,
+      subject_type: r.subject_type,
+      course_codes: r.course_codes,
+      specialization: r.academic_specializations?.name ?? null,
+    }));
     return subjectCacheRef.current;
   };
+
 
   const lookupSubject = async (rawCode: string) => {
     const code = rawCode.trim();
@@ -387,12 +395,25 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
 
       const description = rows.find(r => r.description?.trim())?.description ?? undefined;
 
+      // Programs come from the record's course_codes; when a major record has no
+      // explicit course_codes we fall back to its specialization (IT → BSIT, IS → BSIS).
+      const specToProgram = (spec: string | null): string | null => {
+        const s = (spec ?? '').trim().toUpperCase();
+        if (s === 'IT') return 'BSIT';
+        if (s === 'IS') return 'BSIS';
+        return null;
+      };
+
       const programs = Array.from(
         new Set(
-          rows
-            .flatMap(r => r.course_codes ?? [])
-            .map(c => c?.trim().toUpperCase())
-            .filter(Boolean) as string[]
+          rows.flatMap(r => {
+            const codes = (r.course_codes ?? [])
+              .map(c => c?.trim().toUpperCase())
+              .filter(Boolean) as string[];
+            if (codes.length > 0) return codes;
+            const fallback = specToProgram(r.specialization);
+            return fallback ? [fallback] : [];
+          })
         )
       ).sort((a, b) => (a === 'BSIT' ? -1 : b === 'BSIT' ? 1 : a.localeCompare(b)));
 
@@ -401,6 +422,7 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
         : programs.length > 0
           ? programs.join(' & ')
           : '';
+
 
       if (description) setValue('description', description, { shouldDirty: true, shouldValidate: true });
       if (course) {
