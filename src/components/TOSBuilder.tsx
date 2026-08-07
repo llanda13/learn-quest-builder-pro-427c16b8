@@ -977,7 +977,12 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
                   <p className="text-xs text-primary mt-1">Course & description auto-filled from Subjects database.</p>
                 )}
                 {subjectLookupStatus === 'missing' && (
-                  <p className="text-xs text-amber-600 mt-1">Subject not found in central database — please ask an admin to add it.</p>
+                  <p className="text-xs text-amber-600 mt-1">
+                    Subject not found in central database — please ask an admin to add it.
+                    {subjectSuggestions.length > 0 && (
+                      <> Did you mean: {subjectSuggestions.join(', ')}?</>
+                    )}
+                  </p>
                 )}
                 {errors.subject_no && (
                   <p className="text-sm text-destructive mt-1">{errors.subject_no.message}</p>
