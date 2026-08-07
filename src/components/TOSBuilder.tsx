@@ -98,6 +98,7 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
   const { user } = useAuth();
   const [subjectLookupStatus, setSubjectLookupStatus] = useState<'idle' | 'looking' | 'found' | 'missing'>('idle');
   const [isMinorSubject, setIsMinorSubject] = useState(false);
+  const [subjectSuggestions, setSubjectSuggestions] = useState<string[]>([]);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   
   // Hydrate topics from any saved draft so refresh / tab switch doesn't wipe input.
