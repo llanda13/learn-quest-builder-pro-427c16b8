@@ -395,12 +395,25 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
 
       const description = rows.find(r => r.description?.trim())?.description ?? undefined;
 
+      // Programs come from the record's course_codes; when a major record has no
+      // explicit course_codes we fall back to its specialization (IT → BSIT, IS → BSIS).
+      const specToProgram = (spec: string | null): string | null => {
+        const s = (spec ?? '').trim().toUpperCase();
+        if (s === 'IT') return 'BSIT';
+        if (s === 'IS') return 'BSIS';
+        return null;
+      };
+
       const programs = Array.from(
         new Set(
-          rows
-            .flatMap(r => r.course_codes ?? [])
-            .map(c => c?.trim().toUpperCase())
-            .filter(Boolean) as string[]
+          rows.flatMap(r => {
+            const codes = (r.course_codes ?? [])
+              .map(c => c?.trim().toUpperCase())
+              .filter(Boolean) as string[];
+            if (codes.length > 0) return codes;
+            const fallback = specToProgram(r.specialization);
+            return fallback ? [fallback] : [];
+          })
         )
       ).sort((a, b) => (a === 'BSIT' ? -1 : b === 'BSIT' ? 1 : a.localeCompare(b)));
 
@@ -409,6 +422,7 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
         : programs.length > 0
           ? programs.join(' & ')
           : '';
+
 
       if (description) setValue('description', description, { shouldDirty: true, shouldValidate: true });
       if (course) {
