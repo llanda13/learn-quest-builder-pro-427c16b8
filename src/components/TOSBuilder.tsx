@@ -98,6 +98,7 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
   const { user } = useAuth();
   const [subjectLookupStatus, setSubjectLookupStatus] = useState<'idle' | 'looking' | 'found' | 'missing'>('idle');
   const [isMinorSubject, setIsMinorSubject] = useState(false);
+  const [subjectSuggestions, setSubjectSuggestions] = useState<string[]>([]);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   
   // Hydrate topics from any saved draft so refresh / tab switch doesn't wipe input.
@@ -310,70 +311,73 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
   }, [user?.id, setValue, form]);
 
   // ─── Subject lookup: ONE retrieval path for every subject type.
-  // Step 1: find the record(s) in the central subjects table by code (no
-  // subject_type filtering at all). Step 2: apply the course mapping based on
-  // the classification stored on the retrieved record.
+  // Step 1: retrieve the whole subjects table (cached) and match the entered
+  // code locally — no subject_type filtering anywhere. Step 2: apply the course
+  // mapping based on the classification stored on the retrieved record.
   const normalizeCode = (v: string) =>
     v.toUpperCase().replace(/[\s._-]+/g, '').trim();
+
+  type SubjectRow = {
+    code: string;
+    description: string | null;
+    subject_type: string | null;
+    course_codes: string[] | null;
+  };
+
+  const subjectCacheRef = useRef<SubjectRow[] | null>(null);
+
+  const loadSubjects = async (): Promise<SubjectRow[]> => {
+    if (subjectCacheRef.current) return subjectCacheRef.current;
+    const { data, error } = await supabase
+      .from('academic_subjects')
+      .select('code, description, subject_type, course_codes')
+      .eq('deleted', false)
+      .limit(5000);
+    if (error) throw error;
+    subjectCacheRef.current = (data ?? []) as SubjectRow[];
+    return subjectCacheRef.current;
+  };
 
   const lookupSubject = async (rawCode: string) => {
     const code = rawCode.trim();
     if (!code) {
       setSubjectLookupStatus('idle');
       setIsMinorSubject(false);
+      setSubjectSuggestions([]);
       return;
     }
     setSubjectLookupStatus('looking');
     try {
       const norm = normalizeCode(code);
-      const alpha = (norm.match(/^[A-Z]+/) ?? [''])[0];
+      const all = await loadSubjects();
+      const withNorm = all.map(r => ({ row: r, n: normalizeCode(r.code ?? '') }));
 
-      // Single retrieval: pull every candidate sharing the alphabetic prefix
-      // (or, if none, a broad contains match) and resolve client-side so
-      // spacing variants like "ITPC100" / "ITPC 100" both match.
-      let query = supabase
-        .from('academic_subjects')
-        .select('code, description, subject_type, course_codes')
-        .eq('deleted', false);
-      query = alpha ? query.ilike('code', `${alpha}%`) : query.ilike('code', `%${code}%`);
-      const { data, error } = await query;
+      // Tiered match — every tier searches the SAME single result set.
+      let rows = withNorm.filter(c => c.n === norm).map(c => c.row);
+      if (rows.length === 0) rows = withNorm.filter(c => c.n.startsWith(norm)).map(c => c.row);
+      if (rows.length === 0) rows = withNorm.filter(c => c.n.includes(norm)).map(c => c.row);
 
-      if (error) {
-        console.warn('Subject lookup failed:', error);
+      if (rows.length === 0) {
+        // Offer close matches sharing the alphabetic prefix (e.g. "IT 1" → ITPC/ITCC…)
+        const alpha = (norm.match(/^[A-Z]+/) ?? [''])[0];
+        const digits = (norm.match(/\d+/) ?? [''])[0];
+        const near = withNorm
+          .filter(c => {
+            if (!alpha) return false;
+            const cAlpha = (c.n.match(/^[A-Z]+/) ?? [''])[0];
+            const cDigits = (c.n.match(/\d+/) ?? [''])[0];
+            const alphaHit = cAlpha.startsWith(alpha) || alpha.startsWith(cAlpha);
+            return alphaHit && (!digits || cDigits.endsWith(digits));
+          })
+          .map(c => c.row.code)
+          .slice(0, 6);
+        setSubjectSuggestions(near);
         setSubjectLookupStatus('missing');
         setIsMinorSubject(false);
         return;
       }
 
-      const candidates = (data ?? []) as Array<{
-        code: string;
-        description: string | null;
-        subject_type: string | null;
-        course_codes: string[] | null;
-      }>;
-
-      // Exact (normalized) match first, then prefix match for partial entries.
-      let rows = candidates.filter(r => normalizeCode(r.code ?? '') === norm);
-      if (rows.length === 0) {
-        rows = candidates.filter(r => normalizeCode(r.code ?? '').startsWith(norm));
-      }
-      if (rows.length === 0) {
-        // Fall back to a broad contains search before declaring "not found".
-        const { data: wide } = await supabase
-          .from('academic_subjects')
-          .select('code, description, subject_type, course_codes')
-          .eq('deleted', false)
-          .ilike('code', `%${code.replace(/\s+/g, '%')}%`);
-        rows = ((wide ?? []) as typeof candidates).filter(
-          r => normalizeCode(r.code ?? '').startsWith(norm) || normalizeCode(r.code ?? '') === norm
-        );
-      }
-
-      if (rows.length === 0) {
-        setSubjectLookupStatus('missing');
-        setIsMinorSubject(false);
-        return;
-      }
+      setSubjectSuggestions([]);
 
       // Classification from the retrieved record is the single source of truth.
       const SHARED_TYPES = ['ge', 'pe', 'nstp', 'minor'];
@@ -406,6 +410,7 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
       setSubjectLookupStatus('found');
     } catch (err) {
       console.warn('Subject lookup failed:', err);
+      setSubjectSuggestions([]);
       setSubjectLookupStatus('missing');
     }
   };
@@ -972,7 +977,12 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
                   <p className="text-xs text-primary mt-1">Course & description auto-filled from Subjects database.</p>
                 )}
                 {subjectLookupStatus === 'missing' && (
-                  <p className="text-xs text-amber-600 mt-1">Subject not found in central database — please ask an admin to add it.</p>
+                  <p className="text-xs text-amber-600 mt-1">
+                    Subject not found in central database — please ask an admin to add it.
+                    {subjectSuggestions.length > 0 && (
+                      <> Did you mean: {subjectSuggestions.join(', ')}?</>
+                    )}
+                  </p>
                 )}
                 {errors.subject_no && (
                   <p className="text-sm text-destructive mt-1">{errors.subject_no.message}</p>
