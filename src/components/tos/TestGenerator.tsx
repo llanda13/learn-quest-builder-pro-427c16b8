@@ -8,6 +8,7 @@ import { Loader2, Brain, Database, CheckCircle, AlertCircle } from "lucide-react
 import { TOSData } from "@/pages/TOS"
 import { TestQuestion } from "./GeneratedTest"
 import { shuffleExamChoices } from "@/utils/shuffleExamChoices"
+import { assertTosLink } from "@/services/db/tosLink";
 
 interface TestGeneratorProps {
   tosData: TOSData
@@ -347,7 +348,7 @@ export function TestGenerator({ tosData, onTestGenerated, onCancel }: TestGenera
         school_year: tosData.schoolYear,
         items: securedQuestions,
         answer_key: answerKey,
-        tos_id: tosData.id || null,
+        tos_id: await assertTosLink(tosData.id),
         points_per_question: 1,
         created_by: user.id
       }

@@ -10,7 +10,17 @@ import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, 
 import { Plus, Edit, Trash2, Save, X, FolderTree, BookOpen, GraduationCap } from "lucide-react";
 import { useAcademicHierarchy } from "@/hooks/useAcademicHierarchy";
 
-type EditMode = null | { type: "category"; id?: string; name: string } | { type: "specialization"; id?: string; categoryId: string; name: string } | { type: "subject"; id?: string; specializationId: string; code: string; description: string };
+import type { SubjectType } from "@/services/db/academicHierarchy";
+
+const SUBJECT_TYPES: { value: SubjectType; label: string; hint: string }[] = [
+  { value: "major", label: "Major", hint: "Belongs to one program — Course auto-filled" },
+  { value: "minor", label: "Minor (shared)", hint: "Shared across programs — Course auto-filled as a combined label" },
+  { value: "ge", label: "General Education (GE)", hint: "Course selected manually by the teacher" },
+  { value: "pe", label: "PE", hint: "Course selected manually by the teacher" },
+  { value: "nstp", label: "NSTP", hint: "Course selected manually by the teacher" },
+];
+
+type EditMode = null | { type: "category"; id?: string; name: string } | { type: "specialization"; id?: string; categoryId: string; name: string } | { type: "subject"; id?: string; specializationId: string; code: string; description: string; subjectType: SubjectType; courseCodes: string };
 
 export function FilterManagement() {
   const hierarchy = useAcademicHierarchy();
@@ -21,6 +31,9 @@ export function FilterManagement() {
 
   const specs = selectedCategoryId ? hierarchy.getSpecializations(selectedCategoryId) : [];
   const subjects = selectedSpecId ? hierarchy.getSubjects(selectedSpecId) : [];
+
+  const parseCourseCodes = (raw: string) =>
+    raw.split(/[,&]/).map((c) => c.trim().toUpperCase()).filter(Boolean);
 
   const handleSave = () => {
     if (!editMode) return;
@@ -38,9 +51,9 @@ export function FilterManagement() {
       }
     } else if (editMode.type === "subject") {
       if (editMode.id) {
-        hierarchy.updateSubject.mutate({ id: editMode.id, updates: { code: editMode.code, description: editMode.description } });
+        hierarchy.updateSubject.mutate({ id: editMode.id, updates: { code: editMode.code, description: editMode.description, subject_type: editMode.subjectType, course_codes: parseCourseCodes(editMode.courseCodes) } });
       } else {
-        hierarchy.createSubject.mutate({ specializationId: editMode.specializationId, code: editMode.code, description: editMode.description });
+        hierarchy.createSubject.mutate({ specializationId: editMode.specializationId, code: editMode.code, description: editMode.description, subjectType: editMode.subjectType, courseCodes: parseCourseCodes(editMode.courseCodes) });
       }
     }
     setEditMode(null);
@@ -174,7 +187,7 @@ export function FilterManagement() {
                 Subjects
                 <Badge variant="secondary" className="text-xs">{subjects.length}</Badge>
               </CardTitle>
-              <Button size="sm" variant="outline" onClick={() => setEditMode({ type: "subject", specializationId: selectedSpecId, code: "", description: "" })}>
+              <Button size="sm" variant="outline" onClick={() => setEditMode({ type: "subject", specializationId: selectedSpecId, code: "", description: "", subjectType: "major", courseCodes: "" })}>
                 <Plus className="h-3 w-3 mr-1" /> Add
               </Button>
             </div>
@@ -188,6 +201,16 @@ export function FilterManagement() {
                     <Input placeholder="Description" value={editMode.description} onChange={(e) => setEditMode({ ...editMode, description: e.target.value })} />
                   </div>
                 </div>
+                <div className="grid grid-cols-2 gap-2">
+                  <Select value={editMode.subjectType} onValueChange={(v) => setEditMode({ ...editMode, subjectType: v as SubjectType })}>
+                    <SelectTrigger><SelectValue placeholder="Subject type" /></SelectTrigger>
+                    <SelectContent>
+                      {SUBJECT_TYPES.map((t) => (<SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>))}
+                    </SelectContent>
+                  </Select>
+                  <Input placeholder="Courses (e.g., BSIT, BSIS)" value={editMode.courseCodes} onChange={(e) => setEditMode({ ...editMode, courseCodes: e.target.value })} />
+                </div>
+                <p className="text-xs text-muted-foreground">{SUBJECT_TYPES.find((t) => t.value === editMode.subjectType)?.hint}</p>
                 <div className="flex gap-2">
                   <Button size="sm" onClick={handleSave} disabled={!editMode.code.trim() || !editMode.description.trim()}><Save className="h-3 w-3 mr-1" /> Save</Button>
                   <Button size="sm" variant="ghost" onClick={() => setEditMode(null)}><X className="h-3 w-3 mr-1" /> Cancel</Button>
@@ -197,9 +220,16 @@ export function FilterManagement() {
             {subjects.map((subj) => (
               <div key={subj.id} className="flex items-center justify-between p-2 rounded border text-sm hover:bg-accent/50">
                 {editMode?.type === "subject" && editMode.id === subj.id ? (
-                  <div className="flex gap-2 flex-1">
+                  <div className="flex gap-2 flex-1 flex-wrap">
                     <Input value={editMode.code} onChange={(e) => setEditMode({ ...editMode, code: e.target.value })} className="h-7 text-xs w-20" />
-                    <Input value={editMode.description} onChange={(e) => setEditMode({ ...editMode, description: e.target.value })} className="h-7 text-xs flex-1" />
+                    <Input value={editMode.description} onChange={(e) => setEditMode({ ...editMode, description: e.target.value })} className="h-7 text-xs flex-1 min-w-[10rem]" />
+                    <Select value={editMode.subjectType} onValueChange={(v) => setEditMode({ ...editMode, subjectType: v as SubjectType })}>
+                      <SelectTrigger className="h-7 text-xs w-36"><SelectValue /></SelectTrigger>
+                      <SelectContent>
+                        {SUBJECT_TYPES.map((t) => (<SelectItem key={t.value} value={t.value}>{t.label}</SelectItem>))}
+                      </SelectContent>
+                    </Select>
+                    <Input value={editMode.courseCodes} onChange={(e) => setEditMode({ ...editMode, courseCodes: e.target.value })} placeholder="BSIT, BSIS" className="h-7 text-xs w-32" />
                     <Button size="sm" variant="ghost" onClick={handleSave}><Save className="h-3 w-3" /></Button>
                     <Button size="sm" variant="ghost" onClick={() => setEditMode(null)}><X className="h-3 w-3" /></Button>
                   </div>
@@ -208,9 +238,13 @@ export function FilterManagement() {
                     <div>
                       <Badge variant="outline" className="text-xs mr-2">{subj.code}</Badge>
                       <span>{subj.description}</span>
+                      <Badge variant="secondary" className="text-xs ml-2 uppercase">{subj.subject_type ?? "major"}</Badge>
+                      {(subj.course_codes ?? []).length > 0 && (
+                        <span className="text-xs text-muted-foreground ml-2">{(subj.course_codes ?? []).join(" & ")}</span>
+                      )}
                     </div>
                     <div className="flex gap-1">
-                      <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => setEditMode({ type: "subject", id: subj.id, specializationId: selectedSpecId, code: subj.code, description: subj.description })}>
+                      <Button size="icon" variant="ghost" className="h-6 w-6" onClick={() => setEditMode({ type: "subject", id: subj.id, specializationId: selectedSpecId, code: subj.code, description: subj.description, subjectType: (subj.subject_type ?? "major") as SubjectType, courseCodes: (subj.course_codes ?? []).join(", ") })}>
                         <Edit className="h-3 w-3" />
                       </Button>
                       <Button size="icon" variant="ghost" className="h-6 w-6 text-destructive" onClick={() => setDeleteConfirm({ type: "subject", id: subj.id, name: `${subj.code} - ${subj.description}` })}>
