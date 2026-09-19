@@ -3,6 +3,7 @@ import { TOS } from "../db/tos";
 import type { BloomLevel, Difficulty } from "./classify";
 import { generateQuestionsWithAI } from "./questionGenerator";
 import { shuffleExamChoices } from "@/utils/shuffleExamChoices";
+import { assertTosLink } from "@/services/db/tosLink";
 
 export interface TOSCriteria {
   topic: string;
@@ -460,7 +461,7 @@ async function assembleFinalTest(
       school_year: testData.school_year || null,
       items: securedQuestions,
       answer_key: answerKey,
-      tos_id: tosId,
+      tos_id: await assertTosLink(tosId),
       created_by: userId,
       points_per_question: 1
     })

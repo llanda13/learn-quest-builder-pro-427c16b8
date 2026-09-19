@@ -1,12 +1,15 @@
 import { supabase } from "@/integrations/supabase/client";
 
 export type ValidationDecision = "approved" | "revision_requested";
-export type ValidationStatus = "pending_validation" | "validated" | "revision_requested";
+export type ValidationStatus = "draft" | "pending_validation" | "validated" | "revision_requested";
 
 export interface TestValidation {
   id: string;
   generated_test_id: string;
   validator_id: string;
+  evaluator_name?: string | null;
+  evaluator_email?: string | null;
+  evaluator_role?: string | null;
   percentage_correctness: number;
   decision: ValidationDecision;
   comments: string | null;
@@ -34,7 +37,7 @@ export interface PendingTestRow {
 
 export const TestValidations = {
   async listPending(): Promise<PendingTestRow[]> {
-    const { data, error } = await supabase
+    const { data, error } = await (supabase as any)
       .from("generated_tests")
       .select(
         "id, title, subject, course, exam_period, school_year, semester, tos_id, created_at, created_by, validation_status, items",
@@ -43,7 +46,7 @@ export const TestValidations = {
       .order("created_at", { ascending: false });
     if (error) throw error;
 
-    const rows = (data ?? []) as PendingTestRow[];
+    const rows = (data ?? []) as unknown as PendingTestRow[];
     const teacherIds = Array.from(
       new Set(rows.map((r) => r.created_by).filter((v): v is string => !!v)),
     );
@@ -61,7 +64,7 @@ export const TestValidations = {
   },
 
   async listAll(): Promise<PendingTestRow[]> {
-    const { data, error } = await supabase
+    const { data, error } = await (supabase as any)
       .from("generated_tests")
       .select(
         "id, title, subject, course, exam_period, school_year, semester, tos_id, created_at, created_by, validation_status, items",
@@ -69,11 +72,11 @@ export const TestValidations = {
       .order("created_at", { ascending: false })
       .limit(500);
     if (error) throw error;
-    return (data ?? []) as PendingTestRow[];
+    return (data ?? []) as unknown as PendingTestRow[];
   },
 
   async getLatestForTest(generatedTestId: string): Promise<TestValidation | null> {
-    const { data, error } = await supabase
+    const { data, error } = await (supabase as any)
       .from("test_validations")
       .select("*")
       .eq("generated_test_id", generatedTestId)
@@ -81,7 +84,7 @@ export const TestValidations = {
       .limit(1)
       .maybeSingle();
     if (error) throw error;
-    return (data as TestValidation | null) ?? null;
+    return (data as unknown as TestValidation | null) ?? null;
   },
 
   async submit(payload: {
@@ -93,7 +96,6 @@ export const TestValidations = {
     likert_scores?: Record<string, number>;
     items_for_revision?: string;
     general_comments?: string;
-    expert_full_name?: string;
     expert_position?: string;
     expert_experience?: string;
     item_alignment_matrix?: Array<{ index: number; verdict: string }>;
@@ -115,7 +117,7 @@ export const TestValidations = {
       .filter(Boolean)
       .join("\n\n");
 
-    const { data, error } = await supabase
+    const { data, error } = await (supabase as any)
       .from("test_validations")
       .insert({
         generated_test_id: payload.generated_test_id,
@@ -129,7 +131,6 @@ export const TestValidations = {
           interpretation: payload.interpretation ?? null,
           content_validity_index: payload.content_validity_index ?? null,
           expert_profile: {
-            full_name: payload.expert_full_name ?? null,
             position: payload.expert_position ?? null,
             experience: payload.expert_experience ?? null,
           },
@@ -140,15 +141,14 @@ export const TestValidations = {
         interpretation: payload.interpretation ?? null,
         items_for_revision: payload.items_for_revision ?? null,
         general_comments: payload.general_comments ?? null,
-        expert_full_name: payload.expert_full_name ?? null,
         expert_position: payload.expert_position ?? null,
         expert_experience: payload.expert_experience ?? null,
         item_alignment_matrix: payload.item_alignment_matrix ?? [],
         content_validity_index: payload.content_validity_index ?? null,
-      } as any)
+      })
       .select()
       .single();
     if (error) throw error;
-    return data as TestValidation;
+    return data as unknown as TestValidation;
   },
 };

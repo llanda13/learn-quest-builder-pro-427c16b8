@@ -7,6 +7,8 @@ export interface TOSCriteria {
   knowledge_dimension?: string;
   difficulty: string;
   count: number;
+  item_numbers?: number[];
+  question_type?: string;
 }
 
 export interface GeneratedTest {
@@ -15,6 +17,150 @@ export interface GeneratedTest {
   questions: any[];
   answer_key: any[];
   generated_at: string;
+}
+
+export interface GenerationSlot {
+  item_number: number;
+  topic: string;
+  bloom_level: string;
+  difficulty: string;
+  knowledge_dimension?: string;
+  question_type?: string;
+}
+
+function normalizeQuestionType(type?: string): string {
+  if (!type) return 'mcq';
+  const normalized = type.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+  if (['mcq', 'multiple_choice', 'multiple-choice', 'multiple choice'].includes(normalized)) return 'mcq';
+  if (['true_false', 'true-false', 'true false', 'truefalse', 'true/false'].includes(normalized)) return 'true_false';
+  if (['fill_blank', 'fill-in-the-blank', 'fill blank', 'fill_in_blank'].includes(normalized)) return 'fill_blank';
+  if (['essay', 'long_answer', 'constructed_response'].includes(normalized)) return 'essay';
+  return normalized;
+}
+
+function mapQuestionTypeToDbQuestionTypes(type?: string): string[] {
+  const normalized = normalizeQuestionType(type);
+  switch (normalized) {
+    case 'mcq':
+      return ['mcq', 'multiple-choice', 'multiple_choice', 'multiple choice'];
+    case 'true_false':
+      return ['true_false', 'true-false', 'true false', 'truefalse', 'true/false'];
+    case 'fill_blank':
+      return ['fill_blank', 'fill-in-the-blank', 'fill blank', 'fill_in_blank'];
+    case 'essay':
+      return ['essay', 'long_answer', 'constructed_response'];
+    default:
+      return [normalized];
+  }
+}
+
+function buildGenerationPlanFromTOSCriteria(tosCriteria: TOSCriteria[]): GenerationSlot[] {
+  const slots: GenerationSlot[] = [];
+  const seenItems = new Set<number>();
+
+  for (const criteria of tosCriteria) {
+    if (!Array.isArray(criteria.item_numbers) || criteria.item_numbers.length === 0) {
+      throw new Error(`TOS generation requires explicit item_numbers for topic "${criteria.topic}" and Bloom level "${criteria.bloom_level}".`);
+    }
+
+    const sortedItemNumbers = [...criteria.item_numbers].sort((a, b) => a - b);
+    for (const itemNumber of sortedItemNumbers) {
+      if (itemNumber < 1) {
+        throw new Error(`Invalid TOS item_number ${itemNumber} for topic "${criteria.topic}". Item numbers must start from 1.`);
+      }
+      if (seenItems.has(itemNumber)) {
+        throw new Error(`Duplicate TOS item_number ${itemNumber} found. Each item must occupy one unique slot.`);
+      }
+      seenItems.add(itemNumber);
+      slots.push({
+        item_number: itemNumber,
+        topic: criteria.topic,
+        bloom_level: criteria.bloom_level,
+        difficulty: criteria.difficulty,
+        knowledge_dimension: criteria.knowledge_dimension,
+        question_type: normalizeQuestionType(criteria.question_type)
+      });
+    }
+
+    if (criteria.count !== criteria.item_numbers.length) {
+      console.warn(`TOS count mismatch for ${criteria.topic} / ${criteria.bloom_level}: count=${criteria.count} item_numbers.length=${criteria.item_numbers.length}`);
+    }
+  }
+
+  slots.sort((a, b) => a.item_number - b.item_number);
+  if (slots.length > 0) {
+    const maxItemNumber = slots[slots.length - 1].item_number;
+    const missingItems = [] as number[];
+    for (let i = 1; i <= maxItemNumber; i += 1) {
+      if (!seenItems.has(i)) missingItems.push(i);
+    }
+    if (missingItems.length > 0) {
+      throw new Error(`TOS item placement must define a contiguous assignment from 1 to ${maxItemNumber}. Missing item numbers: ${missingItems.join(', ')}`);
+    }
+  }
+
+  return slots;
+}
+
+function validateGeneratedTestAgainstPlan(plan: GenerationSlot[], questions: any[]): void {
+  const errors: string[] = [];
+
+  if (questions.length !== plan.length) {
+    errors.push(`Expected ${plan.length} questions, but generated ${questions.length}.`);
+  }
+
+  const planTopicCounts = new Map<string, number>();
+  const planBloomCounts = new Map<string, number>();
+  plan.forEach((slot) => {
+    planTopicCounts.set(slot.topic, (planTopicCounts.get(slot.topic) || 0) + 1);
+    planBloomCounts.set(slot.bloom_level, (planBloomCounts.get(slot.bloom_level) || 0) + 1);
+  });
+
+  const actualTopicCounts = new Map<string, number>();
+  const actualBloomCounts = new Map<string, number>();
+
+  for (const slot of plan) {
+    const question = questions[slot.item_number - 1];
+    if (!question) {
+      errors.push(`Missing question for slot ${slot.item_number}.`);
+      continue;
+    }
+
+    if (question.question_number !== slot.item_number) {
+      errors.push(`Slot ${slot.item_number} stored question_number ${question.question_number}.`);
+    }
+    if (question.topic !== slot.topic) {
+      errors.push(`Slot ${slot.item_number} topic mismatch: expected "${slot.topic}", got "${question.topic}".`);
+    }
+    if (question.bloom_level !== slot.bloom_level) {
+      errors.push(`Slot ${slot.item_number} Bloom mismatch: expected "${slot.bloom_level}", got "${question.bloom_level}".`);
+    }
+    if (question.difficulty !== slot.difficulty) {
+      errors.push(`Slot ${slot.item_number} difficulty mismatch: expected "${slot.difficulty}", got "${question.difficulty}".`);
+    }
+    const actualType = normalizeQuestionType(question.question_type || question.type);
+    if (slot.question_type && actualType !== slot.question_type) {
+      errors.push(`Slot ${slot.item_number} question type mismatch: expected "${slot.question_type}", got "${actualType}".`);
+    }
+
+    actualTopicCounts.set(question.topic, (actualTopicCounts.get(question.topic) || 0) + 1);
+    actualBloomCounts.set(question.bloom_level, (actualBloomCounts.get(question.bloom_level) || 0) + 1);
+  }
+
+  for (const [topic, count] of planTopicCounts) {
+    if (actualTopicCounts.get(topic) !== count) {
+      errors.push(`Topic distribution mismatch for "${topic}": expected ${count}, got ${actualTopicCounts.get(topic) || 0}.`);
+    }
+  }
+  for (const [bloom, count] of planBloomCounts) {
+    if (actualBloomCounts.get(bloom) !== count) {
+      errors.push(`Bloom distribution mismatch for "${bloom}": expected ${count}, got ${actualBloomCounts.get(bloom) || 0}.`);
+    }
+  }
+
+  if (errors.length > 0) {
+    throw new Error(`TOS validation failed: ${errors.join(' ')}`);
+  }
 }
 
 /**
@@ -38,152 +184,168 @@ export async function generateTestFromTOS(
   }
   console.log("✅ User authenticated:", user.id);
 
-  const selectedQuestions: any[] = [];
-  const answerKey: any[] = [];
-  let questionNumber = 1;
+  // New approach: Expand TOS into an explicit item-level generation plan
+  // Each plan entry maps to a fixed exam slot and will be filled exactly once.
+  const generationPlan = buildGenerationPlanFromTOSCriteria(tosCriteria);
+  const requiredTotal = generationPlan.length;
+  const maxItemNumber = generationPlan.length > 0 ? generationPlan[generationPlan.length - 1].item_number : 0;
+  const selectedQuestions: any[] = new Array(maxItemNumber);
+  const answerKey: any[] = new Array(maxItemNumber);
 
-  for (const criteria of tosCriteria) {
-    console.log(`\n📊 Processing Criteria: ${criteria.topic} | ${criteria.bloom_level} | ${criteria.difficulty} | Need: ${criteria.count}`);
-    
-    // Step 1: Query existing APPROVED questions matching criteria
-    // (Strict enough to preserve the TOS contract; wide enough to handle case differences)
-    const normalizedBloom = criteria.bloom_level.toLowerCase().trim();
-    const bloomVariants = Array.from(
-      new Set([
-        criteria.bloom_level,
-        normalizedBloom,
-        normalizedBloom.charAt(0).toUpperCase() + normalizedBloom.slice(1),
-      ])
-    ).filter(Boolean);
+  // Iterate the plan one slot at a time to guarantee slot binding
+  for (const slot of generationPlan) {
+    console.log(`\n📊 Filling slot #${slot.item_number}: ${slot.topic} | ${slot.bloom_level} | ${slot.difficulty}`);
 
-    const { data: existingQuestions, error: queryError } = await supabase
+    // Query for an existing approved question that matches the slot exactly.
+    let questionQuery = supabase
       .from('questions')
       .select('*')
       .eq('deleted', false)
       .eq('approved', true)
-      .eq('difficulty', criteria.difficulty)
-      .ilike('topic', `%${criteria.topic}%`)
-      .in('bloom_level', bloomVariants)
+      .eq('difficulty', slot.difficulty)
+      .eq('topic', slot.topic)
+      .eq('bloom_level', slot.bloom_level);
+
+    const dbQuestionTypes = mapQuestionTypeToDbQuestionTypes(slot.question_type);
+    if (dbQuestionTypes.length === 1) {
+      questionQuery = questionQuery.eq('question_type', dbQuestionTypes[0]);
+    } else if (dbQuestionTypes.length > 1) {
+      questionQuery = questionQuery.in('question_type', dbQuestionTypes);
+    }
+
+    const { data: existingCandidates, error: queryError } = await questionQuery
       .order('used_count', { ascending: true })
-      .limit(criteria.count * 3);
+      .limit(10);
 
-    if (queryError) {
-      console.error("❌ Error querying questions:", queryError);
+    if (queryError) console.error('❌ Error querying questions for slot:', queryError);
+
+    const candidates = queryError ? [] : (existingCandidates || []);
+
+    // Try to pick a non-redundant candidate not semantically similar to already filled slots
+    let chosen: any = null;
+    for (const candidate of candidates) {
+      let isSimilar = false;
+      for (const filled of selectedQuestions.filter(Boolean)) {
+        if (candidate.semantic_vector && filled.semantic_vector) {
+          const { data: similarQuestions } = await supabase.rpc('check_question_similarity', {
+            p_question_text: candidate.question_text,
+            p_topic: candidate.topic,
+            p_bloom_level: candidate.bloom_level,
+            p_threshold: 0.85
+          });
+
+          if (similarQuestions && similarQuestions.length > 0) {
+            const similarToSelected = similarQuestions.some((sq: any) =>
+              selectedQuestions.some(s => s && s.id === sq.similar_question_id)
+            );
+            if (similarToSelected) {
+              isSimilar = true;
+              break;
+            }
+          }
+        }
+      }
+      if (!isSimilar) {
+        chosen = candidate;
+        break;
+      }
     }
 
-    const safeExistingQuestions = queryError ? [] : (existingQuestions || []);
-    console.log(`   ✓ Found ${safeExistingQuestions.length} existing questions`);
-
-    let questionsToUse: any[] = [];
-
-    if (safeExistingQuestions.length >= criteria.count) {
-      console.log(`   ✓ Sufficient questions available - selecting ${criteria.count} non-redundant`);
-      // Step 2: Use semantic similarity to select non-redundant questions
-      const selected = await selectNonRedundantQuestions(
-        safeExistingQuestions,
-        criteria.count
-      );
-      console.log(`   ✓ Selected ${selected.length} questions`);
-
-      // ✅ ENFORCEMENT: If similarity filtering dropped items, fill the remaining slots via AI.
-      const remaining = criteria.count - selected.length;
-      if (remaining > 0) {
-        console.warn(`   ⚠️ Similarity filtering left a gap of ${remaining} - filling via AI`);
-        const filled = await generateQuestionsWithAI(criteria, remaining, user.id);
-        if ((filled?.length || 0) < remaining) {
-          console.warn(`   🛟 AI filled ${filled?.length || 0}/${remaining}; adding fallback questions for the rest`);
-          const fallback = await generateFallbackQuestions(criteria, remaining - (filled?.length || 0), user.id);
-          questionsToUse = [...selected, ...(filled || []), ...fallback];
-        } else {
-          questionsToUse = [...selected, ...filled];
-        }
-      } else {
-        questionsToUse = selected;
-      }
-
-    } else {
-      // Step 3: Need to generate new questions via AI
-      const neededCount = criteria.count - safeExistingQuestions.length;
-      console.log(`   ⚠️ Insufficient questions - need ${neededCount} more`);
-      console.log(`   🤖 Activating AI Fallback Generation...`);
-
-      // Use existing questions first
-      questionsToUse = safeExistingQuestions;
-
+    // If no suitable bank question, generate exactly one question for this slot
+    if (!chosen) {
+      console.log(`   ⚠️ No suitable bank candidate for slot #${slot.item_number} - requesting AI for single slot`);
       try {
-        // Generate new questions
-        const newQuestions = await generateQuestionsWithAI(
-          criteria,
-          neededCount,
-          user.id
-        );
-        console.log(`   ✓ AI generated ${newQuestions.length} questions`);
-        console.log(`   📄 Sample AI question:`, newQuestions[0] ? {
-          id: newQuestions[0].id,
-          question_text: newQuestions[0].question_text?.substring(0, 50) + '...',
-          type: newQuestions[0].question_type,
-          hasChoices: !!newQuestions[0].choices,
-          hasAnswer: !!newQuestions[0].correct_answer
-        } : 'none');
+        const generated = await generateQuestionsWithAI({
+          topic: slot.topic,
+          bloom_level: slot.bloom_level,
+          difficulty: slot.difficulty,
+          count: 1,
+          type: slot.question_type || 'mcq'
+        } as any, 1, user.id, { slotNumber: slot.item_number });
 
-        if (newQuestions.length < neededCount) {
-          console.warn(`   🛟 AI returned ${newQuestions.length}/${neededCount}; adding fallback questions for the rest`);
-          const fallback = await generateFallbackQuestions(criteria, neededCount - newQuestions.length, user.id);
-          questionsToUse = [...questionsToUse, ...newQuestions, ...fallback];
-        } else {
-          questionsToUse = [...questionsToUse, ...newQuestions];
+        chosen = (generated && generated[0]) || null;
+        if (!chosen) {
+          console.warn(`   ⚠️ AI did not return a question for slot #${slot.item_number}, using fallback`);
+          const fallback = await generateFallbackQuestions({
+            topic: slot.topic,
+            bloom_level: slot.bloom_level,
+            difficulty: slot.difficulty,
+            count: 1
+          } as any, 1, user.id);
+          chosen = fallback[0];
         }
-      } catch (aiError) {
-        console.error(`   ❌ AI generation failed:`, aiError);
-        const fallback = await generateFallbackQuestions(criteria, neededCount, user.id);
-        questionsToUse = [...questionsToUse, ...fallback];
+      } catch (err) {
+        console.error('   ❌ Error generating AI question for slot:', err);
+        const fallback = await generateFallbackQuestions({
+          topic: slot.topic,
+          bloom_level: slot.bloom_level,
+          difficulty: slot.difficulty,
+          count: 1
+        } as any, 1, user.id);
+        chosen = fallback[0];
+      }
+    } else {
+      // Mark chosen bank question as used
+      try {
+        await supabase.rpc('mark_question_used', { p_question_id: chosen.id, p_test_id: null });
+      } catch {
+        // ignore marking failures
       }
     }
 
-    console.log(`   📝 Adding ${questionsToUse.length} questions to test (starting at #${questionNumber})`);
-    
-    // Add to test with question numbers
-    questionsToUse.forEach(q => {
-      if (!q.question_text || !q.correct_answer) {
-        console.warn(`   ⚠️ Question missing required fields:`, {
-          id: q.id,
-          hasText: !!q.question_text,
-          hasAnswer: !!q.correct_answer
-        });
-      }
-      
-      selectedQuestions.push({
-        ...q,
-        question_number: questionNumber++
-      });
-      
-      answerKey.push({
-        question_number: questionNumber - 1,
-        question_id: q.id,
-        correct_answer: q.correct_answer,
-        points: 1
-      });
-    });
+    // Place chosen question exactly into the designated slot index
+    const idx = slot.item_number - 1;
+    selectedQuestions[idx] = {
+      ...chosen,
+      topic: slot.topic,
+      bloom_level: slot.bloom_level,
+      difficulty: slot.difficulty,
+      knowledge_dimension: slot.knowledge_dimension || chosen.knowledge_dimension,
+      question_type: slot.question_type || chosen.question_type,
+      question_number: slot.item_number
+    };
+    answerKey[idx] = {
+      question_number: slot.item_number,
+      question_id: chosen.id,
+      correct_answer: chosen.correct_answer,
+      points: 1
+    };
   }
 
   console.log(`\n✅ Assembled ${selectedQuestions.length} total questions`);
   console.log(`📋 Answer key has ${answerKey.length} entries`);
 
-  const requiredTotal = tosCriteria.reduce((sum, c) => sum + (c.count || 0), 0);
+  const filledCount = selectedQuestions.filter(Boolean).length;
 
-  if (selectedQuestions.length < requiredTotal) {
-    const shortfall = requiredTotal - selectedQuestions.length;
-    console.warn(`🛟 Final completion guard: assembled ${selectedQuestions.length}/${requiredTotal}; filling ${shortfall} fallback questions`);
+  if (filledCount < requiredTotal) {
+    const shortfall = requiredTotal - filledCount;
+    console.warn(`🛟 Final completion guard: assembled ${filledCount}/${requiredTotal}; filling ${shortfall} fallback questions`);
     const fallbackCriteria = tosCriteria.find(c => c.count > 0) || tosCriteria[0];
     const fallbackQuestions = await generateFallbackQuestions(fallbackCriteria, shortfall, user.id);
+
+    let fillIndex = 0;
     fallbackQuestions.forEach(q => {
-      selectedQuestions.push({ ...q, question_number: questionNumber++ });
-      answerKey.push({
-        question_number: questionNumber - 1,
-        question_id: q.id,
-        correct_answer: q.correct_answer,
-        points: 1
-      });
+      while (fillIndex < selectedQuestions.length && selectedQuestions[fillIndex]) {
+        fillIndex++;
+      }
+
+      if (fillIndex >= selectedQuestions.length) {
+        selectedQuestions.push({ ...q, question_number: selectedQuestions.length + 1 });
+        answerKey.push({
+          question_number: selectedQuestions.length,
+          question_id: q.id,
+          correct_answer: q.correct_answer,
+          points: 1
+        });
+      } else {
+        selectedQuestions[fillIndex] = { ...q, question_number: fillIndex + 1 };
+        answerKey[fillIndex] = {
+          question_number: fillIndex + 1,
+          question_id: q.id,
+          correct_answer: q.correct_answer,
+          points: 1
+        };
+      }
     });
   } else if (selectedQuestions.length > requiredTotal) {
     selectedQuestions.length = requiredTotal;
@@ -194,6 +356,8 @@ export async function generateTestFromTOS(
     console.error("❌ No questions were assembled!");
     throw new Error("No questions were generated. Please check your TOS criteria.");
   }
+
+  validateGeneratedTestAgainstPlan(generationPlan, selectedQuestions);
 
   // Step 4: Store generated test after final choice shuffle + answer-key recalculation
   const securedQuestions = shuffleExamChoices(selectedQuestions).items;
@@ -229,25 +393,23 @@ export async function generateTestFromTOS(
     tos_id: testData.tos_id
   });
   
-  // CRITICAL: Validate TOS ID before inserting
-  if (!testData.tos_id) {
-    console.error("❌ No TOS ID provided in metadata!");
-    throw new Error("Cannot save test without valid TOS ID");
-  }
-  
-  // Verify TOS exists in database
-  const { data: tosEntry, error: tosError } = await supabase
-    .from('tos_entries')
-    .select('id')
-    .eq('id', testData.tos_id)
-    .single();
+  // Validate TOS ID before inserting if one was provided
+  if (testData.tos_id) {
+    const { data: tosEntry, error: tosError } = await supabase
+      .from('tos_entries')
+      .select('id')
+      .eq('id', testData.tos_id)
+      .single();
 
-  if (tosError || !tosEntry) {
-    console.error("❌ TOS entry not found:", testData.tos_id);
-    throw new Error(`TOS entry not found (${testData.tos_id}). Please create TOS first.`);
+    if (tosError || !tosEntry) {
+      console.error("❌ TOS entry not found:", testData.tos_id);
+      throw new Error(`TOS entry not found (${testData.tos_id}). Please create TOS first.`);
+    }
+
+    console.log(`   ✓ TOS exists in database: ${testData.tos_id}`);
+  } else {
+    console.warn('⚠️ No TOS ID provided. Persisting generated test without a saved TOS reference.');
   }
-  
-  console.log(`   ✓ TOS exists in database: ${testData.tos_id}`);
 
   const { data: generatedTest, error: insertError } = await supabase
     .from('generated_tests')
@@ -341,39 +503,56 @@ async function selectNonRedundantQuestions(
 /**
  * Generate new questions using AI when existing questions are insufficient
  */
-async function generateQuestionsWithAI(
+export async function generateQuestionsWithAI(
   criteria: TOSCriteria,
   count: number,
-  userId: string
+  userId: string,
+  options?: { slotNumber?: number; slotId?: string }
 ): Promise<any[]> {
   console.log(`   🤖 Calling AI generation edge function...`);
   console.log(`      Topic: ${criteria.topic}, Bloom: ${criteria.bloom_level}, Difficulty: ${criteria.difficulty}, Count: ${count}`);
   
   // ✅ FIX: Add force_ai_generation flag to ensure AI generates when bank is empty
-  const { data, error } = await supabase.functions.invoke('generate-questions-from-tos', {
-    body: {
-      tos_id: 'temp-generation',
-      total_items: count,
-      distributions: [{
-        topic: criteria.topic,
-        counts: {
-          remembering: criteria.bloom_level.toLowerCase() === 'remembering' ? count : 0,
-          understanding: criteria.bloom_level.toLowerCase() === 'understanding' ? count : 0,
-          applying: criteria.bloom_level.toLowerCase() === 'applying' ? count : 0,
-          analyzing: criteria.bloom_level.toLowerCase() === 'analyzing' ? count : 0,
-          evaluating: criteria.bloom_level.toLowerCase() === 'evaluating' ? count : 0,
-          creating: criteria.bloom_level.toLowerCase() === 'creating' ? count : 0,
-          difficulty: {
-            easy: criteria.difficulty.toLowerCase() === 'easy' ? count : 0,
-            average: criteria.difficulty.toLowerCase() === 'average' ? count : 0,
-            difficult: criteria.difficulty.toLowerCase() === 'difficult' ? count : 0
-          }
+  const invokeBody: any = {
+    tos_id: options?.slotNumber ? `slot-${options.slotNumber}` : 'temp-generation',
+    total_items: count,
+    topic: criteria.topic,
+    bloom_level: criteria.bloom_level,
+    difficulty: criteria.difficulty,
+    question_type: normalizeQuestionType(criteria.question_type),
+    target_item_number: options?.slotNumber,
+    slot_constraints: {
+      topic: criteria.topic,
+      bloom_level: criteria.bloom_level,
+      difficulty: criteria.difficulty,
+      question_type: normalizeQuestionType(criteria.question_type),
+      item_number: options?.slotNumber
+    },
+    distributions: [{
+      topic: criteria.topic,
+      counts: {
+        remembering: criteria.bloom_level.toLowerCase() === 'remembering' ? count : 0,
+        understanding: criteria.bloom_level.toLowerCase() === 'understanding' ? count : 0,
+        applying: criteria.bloom_level.toLowerCase() === 'applying' ? count : 0,
+        analyzing: criteria.bloom_level.toLowerCase() === 'analyzing' ? count : 0,
+        evaluating: criteria.bloom_level.toLowerCase() === 'evaluating' ? count : 0,
+        creating: criteria.bloom_level.toLowerCase() === 'creating' ? count : 0,
+        difficulty: {
+          easy: criteria.difficulty.toLowerCase() === 'easy' ? count : 0,
+          average: criteria.difficulty.toLowerCase() === 'average' ? count : 0,
+          difficult: criteria.difficulty.toLowerCase() === 'difficult' ? count : 0
         }
-      }],
-      allow_unapproved: false,
-      prefer_existing: false,  // ✅ Force AI generation, don't prioritize bank
-      force_ai_generation: true  // ✅ Explicit flag for AI-only mode
-    }
+      }
+    }],
+    allow_unapproved: false,
+    prefer_existing: false,
+    force_ai_generation: true
+  };
+
+  if (options?.slotId) invokeBody.target_slot_id = options.slotId;
+
+  const { data, error } = await supabase.functions.invoke('generate-questions-from-tos', {
+    body: invokeBody
   });
 
   if (error) {

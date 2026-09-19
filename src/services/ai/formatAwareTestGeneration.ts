@@ -12,11 +12,13 @@ import {
   getDefaultFormat,
   scaledFormatSections 
 } from "@/types/examFormats";
+import { generateQuestionsWithAI } from "./testGenerationService";
 import type { TOSCriteria } from "./testGenerationService";
 import { QuestionUniquenessStore, createQuestionFingerprint, extractConcept } from "./questionUniquenessChecker";
 import type { AnswerType, KnowledgeDimension } from "@/types/knowledge";
 import { resolveSubjectMetadata } from "./subjectMetadataResolver";
 import { shuffleExamChoices } from "@/utils/shuffleExamChoices";
+import { assertTosLink } from "@/services/db/tosLink";
 
 export interface FormatAwareTestConfig {
   format: ExamFormat;
@@ -39,6 +41,190 @@ export interface SectionedQuestion {
   topic: string;
   bloom_level: string;
   difficulty: string;
+}
+
+interface GenerationSlot {
+  item_number: number;
+  topic: string;
+  bloom_level: string;
+  difficulty: string;
+  knowledge_dimension?: string;
+  question_type?: string;
+  section_id?: string;
+  section_label?: string;
+  section_title?: string;
+  points_per_question?: number;
+}
+
+function normalizeQuestionType(type?: string): QuestionType {
+  if (!type) return 'mcq';
+  const normalized = type.toLowerCase().replace(/[^a-z0-9]+/g, '_');
+  if (['mcq', 'multiple_choice', 'multiple-choice', 'multiple choice'].includes(normalized)) return 'mcq';
+  if (['true_false', 'true-false', 'true false', 'truefalse', 'true/false'].includes(normalized)) return 'true_false';
+  if (['fill_blank', 'fill-in-the-blank', 'fill blank', 'fill_in_blank'].includes(normalized)) return 'fill_blank';
+  return 'essay';
+}
+
+function mapQuestionTypeToDbQuestionTypes(type?: string): string[] {
+  const normalized = normalizeQuestionType(type);
+  switch (normalized) {
+    case 'mcq':
+      return ['mcq', 'multiple-choice', 'multiple_choice', 'multiple choice'];
+    case 'true_false':
+      return ['true_false', 'true-false', 'true false', 'truefalse', 'true/false'];
+    case 'fill_blank':
+      return ['fill_blank', 'fill-in-the-blank', 'fill blank', 'fill_in_blank'];
+    case 'essay':
+      return ['essay', 'long_answer', 'constructed_response'];
+    default:
+      return [normalized];
+  }
+}
+
+function buildGenerationPlanFromTOSCriteria(tosCriteria: TOSCriteria[]): GenerationSlot[] {
+  const slots: GenerationSlot[] = [];
+  const seenItems = new Set<number>();
+
+  for (const criteria of tosCriteria) {
+    if (!Array.isArray(criteria.item_numbers) || criteria.item_numbers.length === 0) {
+      throw new Error(
+        `Format-aware generation requires explicit item_numbers for topic "${criteria.topic}" and Bloom level "${criteria.bloom_level}".`
+      );
+    }
+
+    const sortedItemNumbers = [...criteria.item_numbers].sort((a, b) => a - b);
+    for (const itemNumber of sortedItemNumbers) {
+      if (itemNumber < 1) {
+        throw new Error(`Invalid TOS item_number ${itemNumber} for topic "${criteria.topic}". Item numbers must begin at 1.`);
+      }
+      if (seenItems.has(itemNumber)) {
+        throw new Error(`Duplicate TOS item_number ${itemNumber} found. Each item slot must be unique.`);
+      }
+      seenItems.add(itemNumber);
+      slots.push({
+        item_number: itemNumber,
+        topic: criteria.topic,
+        bloom_level: criteria.bloom_level,
+        difficulty: criteria.difficulty,
+        knowledge_dimension: criteria.knowledge_dimension,
+        question_type: normalizeQuestionType(criteria.question_type)
+      });
+    }
+
+    if (criteria.count !== criteria.item_numbers.length) {
+      console.warn(
+        `TOS criteria mismatch for ${criteria.topic} / ${criteria.bloom_level}: count=${criteria.count}, item_numbers.length=${criteria.item_numbers.length}`
+      );
+    }
+  }
+
+  slots.sort((a, b) => a.item_number - b.item_number);
+  if (slots.length > 0) {
+    const maxItemNumber = slots[slots.length - 1].item_number;
+    const missingItems: number[] = [];
+    for (let i = 1; i <= maxItemNumber; i += 1) {
+      if (!seenItems.has(i)) missingItems.push(i);
+    }
+    if (missingItems.length > 0) {
+      throw new Error(
+        `TOS item placement must define a contiguous assignment from 1 to ${maxItemNumber}. Missing item numbers: ${missingItems.join(', ')}`
+      );
+    }
+  }
+
+  return slots;
+}
+
+export function assignSlotsToSections(slots: GenerationSlot[], sections: ExamSection[]) {
+  return slots.map((slot) => {
+    const section = sections.find(
+      (s) => slot.item_number >= s.startNumber && slot.item_number <= s.endNumber
+    );
+
+    if (!section) {
+      throw new Error(
+        `Slot ${slot.item_number} is outside the scaled exam sections. Check the format and TOS alignment.`
+      );
+    }
+
+    const normalizedSlotType = normalizeQuestionType(slot.question_type);
+    const normalizedSectionType = normalizeQuestionType(section.questionType);
+
+    if (slot.question_type && normalizedSlotType !== normalizedSectionType) {
+      console.warn(
+        `TOS slot ${slot.item_number} uses question_type "${slot.question_type}" while section ${section.label} is typed as "${section.questionType}". Preserving the TOS slot type and assigning by item range.`
+      );
+    }
+
+    return {
+      ...slot,
+      section_id: section.id,
+      section_label: section.label,
+      section_title: section.title,
+      points_per_question: section.pointsPerQuestion,
+      question_type: normalizedSlotType || normalizedSectionType
+    };
+  });
+}
+
+function validateGeneratedPlanQuestions(plan: GenerationSlot[], questions: SectionedQuestion[]): void {
+  const errors: string[] = [];
+  const expectedTopicCounts = new Map<string, number>();
+  const expectedBloomCounts = new Map<string, number>();
+
+  plan.forEach((slot) => {
+    expectedTopicCounts.set(slot.topic, (expectedTopicCounts.get(slot.topic) || 0) + 1);
+    expectedBloomCounts.set(slot.bloom_level, (expectedBloomCounts.get(slot.bloom_level) || 0) + 1);
+  });
+
+  const actualTopicCounts = new Map<string, number>();
+  const actualBloomCounts = new Map<string, number>();
+
+  if (questions.length !== plan.length) {
+    errors.push(`Expected ${plan.length} questions but generated ${questions.length}.`);
+  }
+
+  plan.forEach((slot) => {
+    const question = questions[slot.item_number - 1];
+    if (!question) {
+      errors.push(`Missing question for slot ${slot.item_number}.`);
+      return;
+    }
+
+    if (question.question_number !== slot.item_number) {
+      errors.push(`Slot ${slot.item_number} stored question_number ${question.question_number}.`);
+    }
+    if (question.topic !== slot.topic) {
+      errors.push(`Slot ${slot.item_number} topic mismatch: expected "${slot.topic}", got "${question.topic}".`);
+    }
+    if (question.bloom_level !== slot.bloom_level) {
+      errors.push(`Slot ${slot.item_number} bloom mismatch: expected "${slot.bloom_level}", got "${question.bloom_level}".`);
+    }
+    if (question.difficulty !== slot.difficulty) {
+      errors.push(`Slot ${slot.item_number} difficulty mismatch: expected "${slot.difficulty}", got "${question.difficulty}".`);
+    }
+    if (question.question_type !== (slot.question_type || question.question_type)) {
+      errors.push(`Slot ${slot.item_number} question type mismatch: expected "${slot.question_type}", got "${question.question_type}".`);
+    }
+
+    actualTopicCounts.set(question.topic, (actualTopicCounts.get(question.topic) || 0) + 1);
+    actualBloomCounts.set(question.bloom_level, (actualBloomCounts.get(question.bloom_level) || 0) + 1);
+  });
+
+  for (const [topic, expected] of expectedTopicCounts) {
+    if (actualTopicCounts.get(topic) !== expected) {
+      errors.push(`Topic distribution mismatch for "${topic}": expected ${expected}, got ${actualTopicCounts.get(topic) || 0}.`);
+    }
+  }
+  for (const [bloom, expected] of expectedBloomCounts) {
+    if (actualBloomCounts.get(bloom) !== expected) {
+      errors.push(`Bloom distribution mismatch for "${bloom}": expected ${expected}, got ${actualBloomCounts.get(bloom) || 0}.`);
+    }
+  }
+
+  if (errors.length > 0) {
+    throw new Error(`Format-aware TOS validation failed: ${errors.join(' ')}`);
+  }
 }
 
 export interface FormatAwareTestResult {
@@ -73,144 +259,127 @@ export async function generateFormatAwareTest(
     throw new Error("User not authenticated");
   }
 
-  // Calculate total items needed from TOS (this is the CONTRACT)
-  const requiredTotal = config.tosCriteria.reduce((sum, c) => sum + c.count, 0);
+  const generationPlan = buildGenerationPlanFromTOSCriteria(config.tosCriteria);
+  const requiredTotal = generationPlan.length;
   console.log(`📊 TOS CONTRACT: ${requiredTotal} total questions required`);
-  
-  // Scale format sections to match total items
+
   const scaledSections = scaledFormatSections(config.format, requiredTotal);
-  
-  console.log("📐 Scaled sections:", scaledSections.map(s => 
+  console.log("📐 Scaled sections:", scaledSections.map(s =>
     `${s.label}: ${s.endNumber - s.startNumber + 1} ${s.questionType}`
   ));
 
-  // Distribute TOS criteria across sections based on format requirements
-  const sectionAssignments = distributeCriteriaToSections(
-    config.tosCriteria,
-    scaledSections
-  );
+  const sectionedSlots = assignSlotsToSections(generationPlan, scaledSections);
 
-  // Validate distribution: total assigned must equal TOS total
-  let totalAssigned = 0;
-  for (const [sectionId, criteria] of sectionAssignments.entries()) {
-    const sectionAssignedCount = criteria.reduce((sum, c) => sum + c.count, 0);
-    totalAssigned += sectionAssignedCount;
-    console.log(`   Section ${sectionId}: ${sectionAssignedCount} items assigned`);
-  }
-  console.log(`📊 Distribution check: ${totalAssigned}/${requiredTotal} items assigned to sections`);
+  const sectionResults: FormatAwareTestResult['sections'] = scaledSections.map((section) => ({
+    id: section.id,
+    label: section.label,
+    title: section.title,
+    instruction: section.instruction,
+    questions: [],
+    totalPoints: 0
+  }));
 
-  // Generate questions for each section
-  const sectionResults: FormatAwareTestResult['sections'] = [];
-  const allQuestions: SectionedQuestion[] = [];
+  const allQuestions: SectionedQuestion[] = new Array(requiredTotal);
   const answerKey: any[] = [];
-  let globalQuestionNumber = 1;
+  const allQuestionTexts = new Set<string>();
+  const sectionMap = new Map(scaledSections.map((section) => [section.id, section]));
 
-  // Session-level deduplication store — shared across ALL sections
-  const uniquenessStore = new QuestionUniquenessStore();
-  const allQuestionTexts: string[] = []; // For text similarity checks
+  for (const slot of sectionedSlots) {
+    console.log(`\n📊 Filling slot #${slot.item_number}: ${slot.topic} | ${slot.bloom_level} | ${slot.difficulty} | ${slot.section_label}`);
 
-  for (const section of scaledSections) {
-    const sectionCriteria = sectionAssignments.get(section.id) || [];
-    const sectionItemCount = section.endNumber - section.startNumber + 1;
-    
-    // For essay sections, use essayCount if specified (items are grouped per essay)
-    const actualQuestionCount = section.questionType === 'essay' && section.essayCount
-      ? section.essayCount
-      : sectionItemCount;
-    
-    console.log(`\n📦 Generating Section ${section.label}: ${section.title}`);
-    console.log(`   Need: ${actualQuestionCount} ${section.questionType} question(s) (covering items ${section.startNumber}-${section.endNumber})`);
+    let questionQuery = supabase
+      .from('questions')
+      .select('*')
+      .eq('deleted', false)
+      .eq('approved', true)
+      .eq('difficulty', slot.difficulty)
+      .eq('topic', slot.topic)
+      .eq('bloom_level', slot.bloom_level);
 
-    // Generate with retry to ensure exact count
-    let sectionQuestions = await generateSectionQuestions(
-      section,
-      sectionCriteria,
-      actualQuestionCount,
-      globalQuestionNumber,
-      user.id,
-      uniquenessStore,
-      allQuestionTexts
-    );
-
-    // COMPLETION GATE: Retry if section is short
-    let retryAttempt = 0;
-    const MAX_SECTION_RETRIES = 2;
-    while (sectionQuestions.length < actualQuestionCount && retryAttempt < MAX_SECTION_RETRIES) {
-      retryAttempt++;
-      const shortfall = actualQuestionCount - sectionQuestions.length;
-      console.log(`   🔄 Section ${section.label} retry ${retryAttempt}: need ${shortfall} more ${section.questionType} questions`);
-      
-      const repairQuestions = await generateSectionQuestions(
-        section,
-        sectionCriteria.length > 0 ? sectionCriteria : config.tosCriteria.slice(0, 1),
-        shortfall,
-        globalQuestionNumber + sectionQuestions.length,
-        user.id,
-        uniquenessStore,
-        allQuestionTexts
-      );
-      sectionQuestions = [...sectionQuestions, ...repairQuestions];
+    const candidateTypes = [normalizeQuestionType(slot.question_type)];
+    if (candidateTypes.length === 1) {
+      questionQuery = questionQuery.in('question_type', mapQuestionTypeToDbQuestionTypes(candidateTypes[0]));
     }
 
-    // Trim to exact count
-    sectionQuestions = sectionQuestions.slice(0, actualQuestionCount);
+    const { data: existingCandidates, error: queryError } = await questionQuery
+      .order('used_count', { ascending: true })
+      .limit(10);
 
-    // Calculate points correctly for essays (essayCount * pointsPerQuestion) vs regular (count * 1)
-    const sectionPoints = section.questionType === 'essay' && section.essayCount
-      ? section.essayCount * section.pointsPerQuestion
-      : sectionQuestions.length * section.pointsPerQuestion;
+    if (queryError) {
+      console.error('❌ Error querying questions for slot:', queryError);
+    }
 
-    // Map questions with section info
-    const mappedQuestions: SectionedQuestion[] = sectionQuestions.map((q, idx) => ({
-      ...q,
-      question_number: globalQuestionNumber + idx,
-      section_id: section.id,
-      section_label: section.label,
-      section_title: section.title,
-      question_type: section.questionType,
-      points: section.pointsPerQuestion
-    }));
+    const candidates = queryError ? [] : (existingCandidates || []);
+    let chosen: any = null;
 
-    // Update answer key
-    mappedQuestions.forEach((q, idx) => {
-      // For essays, calculate the item range this essay covers
-      let displayNumber: string;
-      if (section.questionType === 'essay' && section.essayCount) {
-        const itemsPerEssay = Math.floor(sectionItemCount / section.essayCount);
-        const essayStart = section.startNumber + (idx * itemsPerEssay);
-        const essayEnd = idx === section.essayCount - 1
-          ? section.endNumber
-          : essayStart + itemsPerEssay - 1;
-        displayNumber = `${essayStart}-${essayEnd}`;
-      } else {
-        displayNumber = String(q.question_number);
+    for (const candidate of candidates) {
+      const candidateText = String(candidate.question_text || '').trim().toLowerCase();
+      if (allQuestionTexts.has(candidateText)) continue;
+      chosen = candidate;
+      break;
+    }
+
+    if (!chosen) {
+      console.log(`   ⚠️ No exact bank candidate for slot #${slot.item_number}; generating AI content.`);
+      const generated = await generateQuestionsWithAI(
+        {
+          topic: slot.topic,
+          bloom_level: slot.bloom_level,
+          difficulty: slot.difficulty,
+          count: 1,
+          type: slot.question_type || 'mcq'
+        } as any,
+        1,
+        user.id,
+        { slotNumber: slot.item_number }
+      );
+      chosen = generated[0] || null;
+      if (!chosen) {
+        throw new Error(`AI generation failed for slot ${slot.item_number}.`);
       }
-      
-      answerKey.push({
-        question_number: q.question_number,
-        display_number: displayNumber,
-        question_id: q.id,
-        correct_answer: q.correct_answer,
-        section: section.label,
-        question_type: section.questionType,
-        points: section.pointsPerQuestion
-      });
-    });
-    
-    sectionResults.push({
-      id: section.id,
-      label: section.label,
-      title: section.title,
-      instruction: section.instruction,
-      questions: mappedQuestions,
-      totalPoints: sectionPoints
+    } else {
+      try {
+        await supabase.rpc('mark_question_used', { p_question_id: chosen.id, p_test_id: null });
+      } catch {
+        // ignore marking failures
+      }
+    }
+
+    const section = sectionMap.get(slot.section_id!);
+    const question: SectionedQuestion = {
+      ...chosen,
+      id: chosen.id || `ai-${slot.item_number}-${Date.now()}`,
+      question_number: slot.item_number,
+      section_id: slot.section_id!,
+      section_label: slot.section_label!,
+      section_title: slot.section_title!,
+      question_type: slot.question_type || (section?.questionType ?? 'mcq'),
+      points: slot.points_per_question ?? section?.pointsPerQuestion ?? 1,
+      topic: slot.topic,
+      bloom_level: slot.bloom_level,
+      difficulty: slot.difficulty
+    } as SectionedQuestion;
+
+    allQuestions[slot.item_number - 1] = question;
+    allQuestionTexts.add(String(question.question_text || '').trim().toLowerCase());
+
+    answerKey.push({
+      question_number: question.question_number,
+      question_id: question.id,
+      correct_answer: question.correct_answer,
+      section: question.section_label,
+      question_type: question.question_type,
+      points: question.points
     });
 
-    allQuestions.push(...mappedQuestions);
-    globalQuestionNumber += mappedQuestions.length;
-    
-    console.log(`   ✓ Generated ${mappedQuestions.length}/${actualQuestionCount} question(s) (${sectionPoints} pts)`);
+    const sectionResult = sectionResults.find((s) => s.id === slot.section_id);
+    if (sectionResult) {
+      sectionResult.questions.push(question);
+      sectionResult.totalPoints += question.points;
+    }
   }
+
+  validateGeneratedPlanQuestions(sectionedSlots, allQuestions);
 
   let totalPoints = sectionResults.reduce((sum, s) => sum + s.totalPoints, 0);
 
@@ -291,6 +460,10 @@ export async function generateFormatAwareTest(
     };
   });
 
+  // The generated questionnaire must be permanently bound to the exact saved TOS
+  // that produced it. Verified before persistence — never inferred afterwards.
+  const linkedTosId = await assertTosLink(config.testMetadata?.tos_id);
+
   // Save to database - cast items and answer_key to Json type
   const testData = {
     title: config.testTitle,
@@ -302,7 +475,7 @@ export async function generateFormatAwareTest(
     semester: config.testMetadata?.semester || null,
     items: securedQuestions as unknown as any,
     answer_key: securedAnswerKey as unknown as any,
-    tos_id: config.testMetadata?.tos_id || null,
+    tos_id: linkedTosId,
     points_per_question: 1,
     created_by: user.id,
   };

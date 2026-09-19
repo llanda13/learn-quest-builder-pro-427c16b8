@@ -6,6 +6,7 @@ import { QuestionUniquenessStore, createQuestionFingerprint } from "./questionUn
 import type { AnswerType, KnowledgeDimension } from "@/types/knowledge";
 import { resolveSubjectMetadata } from "./subjectMetadataResolver";
 import { shuffleExamChoices } from "@/utils/shuffleExamChoices";
+import { assertTosLink } from "@/services/db/tosLink";
 
 export interface TOSRequirement {
   topic: string;
@@ -523,7 +524,7 @@ export class CompleteTestGenerator {
         school_year: metadata.school_year || null,
         items: securedQuestions,
         answer_key: answerKey,
-        tos_id: metadata.tos_id || null,
+        tos_id: await assertTosLink(metadata.tos_id),
         created_by: userId,
         points_per_question: 1
       })

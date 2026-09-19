@@ -54,7 +54,19 @@ export const TOS = {
     }
 
     console.log("📝 Creating TOS entry for user:", user.id);
-    
+
+    // Ensure a profile row exists for this user (FK target for owner/created_by
+    // in some deployed environments). Safe no-op if the row already exists.
+    const { error: profileError } = await supabase
+      .from("profiles")
+      .upsert(
+        { id: user.id, email: user.email ?? null, full_name: (user.user_metadata as any)?.full_name ?? null },
+        { onConflict: "id" }
+      );
+    if (profileError) {
+      console.warn("⚠️ Could not ensure profile row exists:", profileError.message);
+    }
+
     // Ensure title is always set
     const title = payload.title || `${payload.subject_no || payload.course} - ${payload.exam_period || 'Examination'}`;
     
@@ -64,6 +76,7 @@ export const TOS = {
       owner: user.id,        // REQUIRED: UUID for RLS policy
       created_by: user.id    // REQUIRED: UUID for RLS policy
     };
+
     
     console.log("📦 TOS data to insert:", {
       title: tosData.title,
@@ -93,6 +106,10 @@ export const TOS = {
         throw new Error(`Duplicate entry: A TOS with this information already exists.`);
       } else if (error.code === '23502') {
         throw new Error(`Missing required field: ${error.message}`);
+      } else if (error.code === '23503') {
+        throw new Error(
+          `Your user profile is missing in the database, so the TOS cannot be linked to your account. Please sign out, sign back in, and try again. (${error.message})`
+        );
       }
       
       throw new Error(`Failed to save TOS: ${error.message}`);

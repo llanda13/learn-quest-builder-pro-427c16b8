@@ -124,7 +124,7 @@ export const GeneratedTests = {
       version_label: secured.version_label,
       created_by: user.id,
       content_hash: (secured as any).content_hash,
-      validation_status: 'pending_validation',
+      validation_status: 'draft',
     };
 
     const { data, error } = await supabase
@@ -164,7 +164,7 @@ export const GeneratedTests = {
       version_label: secured.version_label,
       created_by: user.id,
       content_hash: (secured as any).content_hash,
-      validation_status: 'pending_validation',
+      validation_status: 'draft',
     };
 
     const { data, error } = await supabase
@@ -206,7 +206,7 @@ export const GeneratedTests = {
         version_number: secured.version_number,
         created_by: user.id,
         content_hash: (secured as any).content_hash,
-        validation_status: 'pending_validation',
+        validation_status: 'draft',
       };
     });
 
@@ -269,6 +269,59 @@ export const GeneratedTests = {
       .select()
       .single();
     
+    if (error) throw error;
+    return data;
+  },
+
+  /** Replace a single question in a draft questionnaire, keeping the answer key in sync. */
+  async updateItem(id: string, index: number, patch: Record<string, any>) {
+    const current = await this.getById(id);
+    const status = (current as any)?.validation_status;
+    if (status !== 'draft' && status !== 'revision_requested') {
+      throw new Error('This questionnaire is locked and can no longer be edited.');
+    }
+    const items = Array.isArray((current as any).items) ? [...(current as any).items] : [];
+    if (index < 0 || index >= items.length) throw new Error('Question not found in this questionnaire.');
+    items[index] = { ...items[index], ...patch };
+
+    // Keep the stored answer key aligned with the edited correct answer.
+    let answerKey = (current as any).answer_key;
+    const newAnswer = patch.correct_answer;
+    if (newAnswer !== undefined && answerKey) {
+      if (Array.isArray(answerKey)) {
+        answerKey = answerKey.map((entry: any, i: number) =>
+          i === index
+            ? (entry && typeof entry === 'object' ? { ...entry, correct_answer: newAnswer } : newAnswer)
+            : entry,
+        );
+      } else if (typeof answerKey === 'object') {
+        const key = String(index + 1);
+        const entry = (answerKey as Record<string, any>)[key];
+        answerKey = {
+          ...(answerKey as Record<string, any>),
+          [key]: entry && typeof entry === 'object' ? { ...entry, correct_answer: newAnswer } : newAnswer,
+        };
+      }
+    }
+
+    const { data, error } = await supabase
+      .from('generated_tests')
+      .update({ items, answer_key: answerKey, content_hash: computeTestContentHash(items, answerKey) } as any)
+      .eq('id', id)
+      .select()
+      .single();
+    if (error) throw error;
+    return data;
+  },
+
+  /** Lock the draft and hand it over to the evaluators. */
+  async submitForValidation(id: string) {
+    const { data, error } = await supabase
+      .from('generated_tests')
+      .update({ validation_status: 'pending_validation' } as any)
+      .eq('id', id)
+      .select()
+      .single();
     if (error) throw error;
     return data;
   },

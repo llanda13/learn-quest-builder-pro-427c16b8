@@ -21,11 +21,15 @@ export interface AcademicSpecialization {
   category_name?: string;
 }
 
+export type SubjectType = "major" | "minor" | "ge" | "pe" | "nstp";
+
 export interface AcademicSubject {
   id: string;
   specialization_id: string;
   code: string;
   description: string;
+  subject_type: SubjectType;
+  course_codes: string[];
   deleted: boolean;
   deleted_at: string | null;
   created_at: string;
@@ -220,17 +224,32 @@ export const AcademicHierarchy = {
     })) as AcademicSubject[];
   },
 
-  async createSubject(specializationId: string, code: string, description: string): Promise<AcademicSubject> {
+  async createSubject(
+    specializationId: string,
+    code: string,
+    description: string,
+    subjectType: SubjectType = "major",
+    courseCodes: string[] = [],
+  ): Promise<AcademicSubject> {
     const { data, error } = await supabase
       .from("academic_subjects")
-      .insert({ specialization_id: specializationId, code, description } as any)
+      .insert({
+        specialization_id: specializationId,
+        code,
+        description,
+        subject_type: subjectType,
+        course_codes: courseCodes,
+      } as any)
       .select("*")
       .single();
     if (error) throw error;
     return data as AcademicSubject;
   },
 
-  async updateSubject(id: string, updates: { code?: string; description?: string }): Promise<AcademicSubject> {
+  async updateSubject(
+    id: string,
+    updates: { code?: string; description?: string; subject_type?: SubjectType; course_codes?: string[] },
+  ): Promise<AcademicSubject> {
     const { data, error } = await supabase
       .from("academic_subjects")
       .update({ ...updates, updated_at: new Date().toISOString() } as any)
@@ -240,6 +259,29 @@ export const AcademicHierarchy = {
     if (error) throw error;
     return data as AcademicSubject;
   },
+
+  /**
+   * Central subject lookup used by the TOS builder.
+   * Case-insensitive code match against the central subject database.
+   * Returns null only when the query succeeded and no record exists.
+   */
+  async lookupSubjectByCode(code: string): Promise<AcademicSubject | null> {
+    const { data, error } = await supabase
+      .from("academic_subjects")
+      .select("*, academic_specializations(name, academic_categories(name))")
+      .ilike("code", code.trim())
+      .eq("deleted", false)
+      .limit(1)
+      .maybeSingle();
+    if (error) throw error;
+    if (!data) return null;
+    return {
+      ...(data as any),
+      specialization_name: (data as any).academic_specializations?.name,
+      category_name: (data as any).academic_specializations?.academic_categories?.name,
+    } as AcademicSubject;
+  },
+
 
   async softDeleteSubject(id: string): Promise<void> {
     const now = new Date().toISOString();
