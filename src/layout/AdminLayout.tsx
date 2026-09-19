@@ -1,6 +1,7 @@
-import { ReactNode, useState } from "react";
+import { ReactNode, useState, useEffect } from "react";
 import { Link, useLocation } from "react-router-dom";
 import { useAuth } from "@/lib/auth";
+import { supabase } from "@/integrations/supabase/client";
 import { 
   LayoutDashboard, 
   Users, 
@@ -10,13 +11,17 @@ import {
   LogOut,
   ChevronLeft,
   ChevronRight,
-  Brain,
   Upload,
   Building2,
+  Sparkles,
+
   ClipboardCheck,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
+import { BrandLogo } from "@/components/BrandLogo";
+
 
 // Cleaned up admin menu - with AI Test Generator moved from Teacher
 const adminMenuItems = [
@@ -47,14 +52,20 @@ const adminMenuItems = [
   { 
     title: "AI Assistant", 
     href: "/admin/ai-assistant", 
-    icon: Brain,
+    icon: Sparkles,
     description: "Academic AI helper" 
   },
   { 
     title: "Expert Validation", 
     href: "/validator/pending", 
     icon: ClipboardCheck,
-    description: "Review generated TQs" 
+    description: "Review questionnaires directly" 
+  },
+  { 
+    title: "Evaluation Records", 
+    href: "/admin/evaluations", 
+    icon: ClipboardCheck,
+    description: "Expert validation audit trail" 
   },
   { 
     title: "Department Officers", 
@@ -85,8 +96,32 @@ interface AdminLayoutProps {
 
 export function AdminLayout({ children }: AdminLayoutProps) {
   const [collapsed, setCollapsed] = useState(false);
+  const [profile, setProfile] = useState<{ full_name?: string; avatar_url?: string } | null>(null);
   const location = useLocation();
   const { user, signOut } = useAuth();
+
+  useEffect(() => {
+    if (!user) return;
+    (async () => {
+      try {
+        const { data } = await supabase
+          .from("profiles")
+          .select("full_name, avatar_url")
+          .eq("id", user.id)
+          .single();
+        setProfile(data);
+      } catch (error) {
+        console.error("Error fetching profile:", error);
+      }
+    })();
+  }, [user]);
+
+  const displayName = profile?.full_name || user?.email?.split("@")[0] || "Administrator";
+
+  const getInitials = (name?: string) => {
+    if (!name) return "A";
+    return name.split(" ").map((n) => n[0]).join("").toUpperCase().slice(0, 2);
+  };
 
   const isActive = (path: string) => location.pathname === path || location.pathname.startsWith(path + "/");
 
@@ -104,27 +139,30 @@ export function AdminLayout({ children }: AdminLayoutProps) {
         )}
       >
         {/* Header */}
-        <div className="flex items-center justify-between p-4 border-b border-border">
-          {!collapsed && (
-            <div className="flex items-center gap-2">
-              <div className="w-8 h-8 bg-primary rounded-lg flex items-center justify-center">
-                <Brain className="w-4 h-4 text-primary-foreground" />
+        <div className="p-4 border-b border-border space-y-3">
+          <div className="flex items-center justify-between gap-2">
+            {!collapsed && (
+              <div className="flex items-center gap-2 min-w-0">
+                <BrandLogo className="w-10 h-10" />
+                <div className="min-w-0">
+                  <h1 className="font-bold text-lg leading-tight truncate">TestBank</h1>
+                  <p className="text-xs text-muted-foreground truncate">Assessment Platform</p>
+                </div>
               </div>
-              <div>
-                <h1 className="font-bold text-lg text-foreground">Admin Panel</h1>
-                <p className="text-xs text-muted-foreground">System Management</p>
-              </div>
-            </div>
-          )}
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setCollapsed(!collapsed)}
-            className="shrink-0 text-muted-foreground hover:text-foreground hover:bg-muted"
-          >
-            {collapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
-          </Button>
+            )}
+
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setCollapsed(!collapsed)}
+              className="shrink-0 text-muted-foreground hover:text-foreground hover:bg-muted"
+            >
+              {collapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
+            </Button>
+          </div>
         </div>
+
+
 
         {/* Main Navigation */}
         <nav className="flex-1 p-2 space-y-1 overflow-y-auto">
@@ -192,21 +230,26 @@ export function AdminLayout({ children }: AdminLayoutProps) {
           </button>
         </nav>
 
-        {/* User Info */}
+        {/* Profile - bottom */}
         {!collapsed && (
           <div className="p-4 border-t border-border">
             <div className="flex items-center gap-3">
-              <div className="w-8 h-8 bg-accent rounded-full flex items-center justify-center">
-                <Users className="w-4 h-4 text-accent-foreground" />
-              </div>
+              <Avatar className="h-9 w-9">
+                <AvatarImage src={profile?.avatar_url} alt={displayName} />
+                <AvatarFallback className="bg-accent text-accent-foreground text-xs">
+                  {getInitials(profile?.full_name)}
+                </AvatarFallback>
+              </Avatar>
               <div className="min-w-0 flex-1">
-                <div className="font-medium text-sm text-foreground truncate">{user?.email}</div>
-                <div className="text-xs text-muted-foreground">Administrator</div>
+                <div className="font-medium text-sm text-foreground truncate">{displayName}</div>
+                <div className="text-xs text-muted-foreground truncate">Administrator</div>
               </div>
             </div>
           </div>
         )}
       </div>
+
+
 
       {/* Main Content - Vivid Purple (secondary) background */}
       <main className={cn(

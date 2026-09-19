@@ -18,6 +18,7 @@ import RecentlyDeleted from "./pages/admin/RecentlyDeleted";
 import AdminSettings from "./pages/admin/Settings";
 import DepartmentOfficers from "./pages/admin/DepartmentOfficers";
 import AILogs from "./pages/admin/AILogs";
+import EvaluationRecords from "./pages/admin/EvaluationRecords";
 import TOSPage from "./pages/teacher/TOSPage";
 
 import MyTests from "./pages/teacher/MyTests";
@@ -34,7 +35,7 @@ import Tests from "./pages/Tests";
 import Collaboration from "./pages/Collaboration";
 import Quality from "./pages/Quality";
 import TestAssembly from "./pages/TestAssembly";
-import { ProtectedRoute } from "./components/ProtectedRoute";
+import { ProtectedRoute, ReauthenticationGate } from "./components/ProtectedRoute";
 import { AdminLayout } from "./components/layout/AdminLayout";
 import { TeacherLayout } from "./components/layout/TeacherLayout";
 import { ValidatorLayout } from "./layout/ValidatorLayout";
@@ -95,6 +96,7 @@ const App = () => {
                         <Route path="recently-deleted" element={<RecentlyDeleted />} />
                         <Route path="ai-assistant" element={<AIAssistant />} />
                         <Route path="ai-logs" element={<AILogs />} />
+                        <Route path="evaluations" element={<EvaluationRecords />} />
                         <Route path="quality" element={<Quality />} />
                         <Route path="test-assembly" element={<TestAssembly />} />
                         <Route path="tests" element={<Tests />} />
@@ -139,19 +141,21 @@ const App = () => {
                 } 
               />
 
-              {/* Validator (Evaluator) Routes — accessible to validator + admin */}
+              {/* Evaluator Routes — authorized evaluator accounts ONLY (no admin, no teacher) */}
               <Route
                 path="/validator/*"
                 element={
-                  <ProtectedRoute allowedRoles={["validator", "admin"]}>
-                    <ValidatorLayout>
-                      <Routes>
+                  <ProtectedRoute allowedRoles={["admin", "validator"]}>
+                    <ReauthenticationGate>
+                      <ValidatorLayout>
+                        <Routes>
                         <Route index element={<Navigate to="/validator/pending" replace />} />
                         <Route path="pending" element={<ValidatorDashboard />} />
                         <Route path="review/:testId" element={<ValidateTestPage />} />
                         <Route path="history" element={<ValidatorHistory />} />
-                      </Routes>
-                    </ValidatorLayout>
+                        </Routes>
+                      </ValidatorLayout>
+                    </ReauthenticationGate>
                   </ProtectedRoute>
                 }
               />

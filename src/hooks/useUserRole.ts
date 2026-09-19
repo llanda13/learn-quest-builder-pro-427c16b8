@@ -5,6 +5,8 @@ export type UserRole = 'admin' | 'teacher' | 'validator' | 'student';
 
 export interface UserRoleData {
   role: UserRole | null;
+  roles: UserRole[];
+  userId: string | null;
   loading: boolean;
   isAdmin: boolean;
   isTeacher: boolean;
@@ -13,7 +15,16 @@ export interface UserRoleData {
   refetch: () => Promise<void>;
 }
 
+/**
+ * Roles are additive permissions. A teacher may also be explicitly granted
+ * validator access without losing teacher tools.
+ *
+ * A role is only granted when it is explicitly assigned in `user_roles`.
+ * No role implies another role.
+ */
 export function useUserRole(): UserRoleData {
+  const [roles, setRoles] = useState<UserRole[]>([]);
+  const [userId, setUserId] = useState<string | null>(null);
   const [role, setRole] = useState<UserRole | null>(null);
   const [loading, setLoading] = useState(true);
 
@@ -21,38 +32,38 @@ export function useUserRole(): UserRoleData {
     try {
       setLoading(true);
       const { data: { user } } = await supabase.auth.getUser();
-      
+
+      setUserId(user?.id ?? null);
+
       if (!user) {
         setRole(null);
+        setRoles([]);
         return;
       }
 
-      // Fetch user's roles from user_roles table
       const { data: userRoles, error } = await supabase
         .from('user_roles')
         .select('role')
-        .eq('user_id', user.id)
-        .order('role', { ascending: true }); // Admin will come first due to enum ordering
+        .eq('user_id', user.id);
 
       if (error) {
         console.error('Error fetching user role:', error);
         setRole(null);
+        setRoles([]);
         return;
       }
 
-      // User can have multiple roles, take the highest priority
-      if (userRoles && userRoles.length > 0) {
-        const roleOrder: UserRole[] = ['admin', 'validator', 'teacher', 'student'];
-        const highestRole = roleOrder.find(r => 
-          userRoles.some(ur => ur.role === r)
-        ) || 'teacher';
-        setRole(highestRole);
-      } else {
-        setRole('teacher'); // Default role
-      }
+      const assigned = (userRoles ?? []).map((r) => r.role as UserRole);
+      setRoles(assigned);
+
+      // Primary role (used for landing redirects) — explicit assignment only.
+      const priority: UserRole[] = ['admin', 'teacher', 'validator', 'student'];
+      const primary = priority.find((r) => assigned.includes(r)) ?? 'teacher';
+      setRole(primary);
     } catch (error) {
       console.error('Error in useUserRole:', error);
       setRole(null);
+      setRoles([]);
     } finally {
       setLoading(false);
     }
@@ -61,7 +72,6 @@ export function useUserRole(): UserRoleData {
   useEffect(() => {
     fetchUserRole();
 
-    // Subscribe to auth changes
     const { data: { subscription } } = supabase.auth.onAuthStateChange(() => {
       fetchUserRole();
     });
@@ -71,27 +81,20 @@ export function useUserRole(): UserRoleData {
     };
   }, []);
 
+  // Strict: only an explicitly assigned role grants access.
   const hasRole = (checkRole: UserRole): boolean => {
-    if (!role) return false;
-    
-    // Admin has all permissions
-    if (role === 'admin') return true;
-    
-    // Validator has teacher permissions
-    if (role === 'validator' && (checkRole === 'teacher' || checkRole === 'validator')) {
-      return true;
-    }
-    
-    // Otherwise, exact match required
-    return role === checkRole;
+    if (roles.length === 0) return checkRole === 'teacher' && role === 'teacher';
+    return roles.includes(checkRole);
   };
 
   return {
     role,
+    roles,
+    userId,
     loading,
-    isAdmin: role === 'admin',
-    isTeacher: role === 'teacher' || role === 'admin' || role === 'validator',
-    isValidator: role === 'validator' || role === 'admin',
+    isAdmin: hasRole('admin'),
+    isTeacher: hasRole('teacher'),
+    isValidator: hasRole('validator'),
     hasRole,
     refetch: fetchUserRole,
   };

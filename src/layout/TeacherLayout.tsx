@@ -5,7 +5,6 @@ import { supabase } from '@/integrations/supabase/client';
 import { 
   LayoutDashboard, 
   FileText, 
-  Sparkles, 
   Clock,
   BarChart3,
   Settings,
@@ -22,6 +21,7 @@ import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
+import { BrandLogo } from "@/components/BrandLogo";
 
 const teacherMenuItems = [
   { 
@@ -118,34 +118,49 @@ export function TeacherLayout({ children }: TeacherLayoutProps) {
   };
 
   const displayName = profile?.full_name || user?.email?.split('@')[0] || 'Teacher';
-  const portalTitle = profile?.full_name ? `${profile.full_name.split(' ')[0]}'s Portal` : 'Teacher Portal';
 
   const SidebarContent = ({ isMobile = false }: { isMobile?: boolean }) => (
     <>
-      {/* Header */}
-      <div className="flex items-center justify-between p-4 border-b border-border">
-        {(!collapsed || isMobile) && (
-          <div className="flex items-center gap-2 min-w-0">
-            <div className="w-8 h-8 bg-gradient-to-br from-blue-500 to-cyan-500 rounded-lg flex items-center justify-center shrink-0">
-              <Sparkles className="w-4 h-4 text-white" />
+      {/* Header - Branding + Profile */}
+      <div className="p-4 border-b border-border space-y-3">
+        <div className="flex items-center justify-between gap-2">
+          {(!collapsed || isMobile) && (
+            <div className="flex items-center gap-2 min-w-0">
+              <BrandLogo className="w-10 h-10" />
+              <div className="min-w-0">
+                <h1 className="font-bold text-lg leading-tight truncate">TestBank</h1>
+                <p className="text-xs text-muted-foreground truncate">Assessment Platform</p>
+              </div>
             </div>
-            <div className="min-w-0">
-              <h1 className="font-bold text-lg truncate">EduTest AI</h1>
-              <p className="text-xs text-muted-foreground truncate">{portalTitle}</p>
+          )}
+          {!isMobile && (
+            <Button
+              variant="ghost"
+              size="icon"
+              onClick={() => setCollapsed(!collapsed)}
+              className="shrink-0 hidden lg:flex"
+            >
+              {collapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
+            </Button>
+          )}
+        </div>
+
+        {(!collapsed || isMobile) && (
+          <div className="flex items-center gap-3 rounded-lg bg-muted/50 p-2">
+            <Avatar className="h-9 w-9">
+              <AvatarImage src={profile?.avatar_url} alt={displayName} />
+              <AvatarFallback className="bg-primary text-primary-foreground text-xs">
+                {getInitials(profile?.full_name)}
+              </AvatarFallback>
+            </Avatar>
+            <div className="min-w-0 flex-1">
+              <div className="font-medium text-sm truncate">{displayName}</div>
+              <div className="text-xs text-muted-foreground truncate">Teacher</div>
             </div>
           </div>
         )}
-        {!isMobile && (
-          <Button
-            variant="ghost"
-            size="icon"
-            onClick={() => setCollapsed(!collapsed)}
-            className="shrink-0 hidden lg:flex"
-          >
-            {collapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
-          </Button>
-        )}
       </div>
+
 
       {/* Main Navigation */}
       <nav className="flex-1 p-2 space-y-1 overflow-y-auto">
@@ -215,23 +230,6 @@ export function TeacherLayout({ children }: TeacherLayoutProps) {
         </button>
       </nav>
 
-      {/* User Info */}
-      {(!collapsed || isMobile) && (
-        <div className="p-4 border-t border-border">
-          <div className="flex items-center gap-3">
-            <Avatar className="h-8 w-8">
-              <AvatarImage src={profile?.avatar_url} alt={displayName} />
-              <AvatarFallback className="bg-gradient-to-br from-blue-500 to-purple-500 text-white text-xs">
-                {getInitials(profile?.full_name)}
-              </AvatarFallback>
-            </Avatar>
-            <div className="min-w-0 flex-1">
-              <div className="font-medium text-sm truncate">{displayName}</div>
-              <div className="text-xs text-muted-foreground truncate">{user?.email}</div>
-            </div>
-          </div>
-        </div>
-      )}
     </>
   );
 
@@ -253,10 +251,8 @@ export function TeacherLayout({ children }: TeacherLayoutProps) {
             </SheetContent>
           </Sheet>
           <div className="flex items-center gap-2">
-            <div className="w-7 h-7 bg-gradient-to-br from-blue-500 to-cyan-500 rounded-lg flex items-center justify-center">
-              <Sparkles className="w-3.5 h-3.5 text-white" />
-            </div>
-            <span className="font-bold">EduTest AI</span>
+            <BrandLogo className="w-7 h-7" />
+            <span className="font-bold truncate">TestBank</span>
           </div>
         </div>
         <Avatar className="h-8 w-8">

@@ -9,9 +9,11 @@ import {
   ChevronRight,
   ShieldCheck,
   Users,
+  ArrowLeftRight,
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
+import { useUserRole } from "@/hooks/useUserRole";
 
 const menu = [
   {
@@ -36,6 +38,9 @@ export function ValidatorLayout({ children }: Props) {
   const [collapsed, setCollapsed] = useState(false);
   const location = useLocation();
   const { user, signOut } = useAuth();
+  // Visibility comes strictly from roles assigned in the database.
+  const { isTeacher, isValidator, loading: rolesLoading } = useUserRole();
+  const canSwitchToTeacher = !rolesLoading && isTeacher && isValidator;
   const isActive = (path: string) =>
     location.pathname === path || location.pathname.startsWith(path + "/");
 
@@ -68,6 +73,22 @@ export function ValidatorLayout({ children }: Props) {
             {collapsed ? <ChevronRight className="w-4 h-4" /> : <ChevronLeft className="w-4 h-4" />}
           </Button>
         </div>
+
+        {canSwitchToTeacher && (
+          <div className="p-2 border-b border-border">
+            <Link
+              to="/teacher/dashboard"
+              title="Back to Teacher Platform"
+              className={cn(
+                "flex items-center gap-3 px-3 py-2 rounded-lg text-sm font-medium transition-all duration-200",
+                "bg-accent text-accent-foreground hover:bg-accent/80",
+              )}
+            >
+              <ArrowLeftRight className="w-5 h-5 shrink-0" />
+              {!collapsed && <span>Back to Teacher Platform</span>}
+            </Link>
+          </div>
+        )}
 
         <nav className="flex-1 p-2 space-y-1 overflow-y-auto">
           {menu.map((item) => {

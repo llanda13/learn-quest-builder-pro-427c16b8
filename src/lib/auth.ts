@@ -37,22 +37,43 @@ export const useAuthState = () => {
   const [loading, setLoading] = useState(true);
 
   useEffect(() => {
-    // Set up auth state listener
+    let mounted = true;
+
+    // Set up auth state listener FIRST so we never miss an event.
     const { data: { subscription } } = supabase.auth.onAuthStateChange(
-      async (event, session) => {
-        setSession(session);
-        setUser(session?.user ?? null);
-        
-        if (session?.user) {
-          // Fetch user profile from database (role determined by user_roles table)
+      (event, nextSession) => {
+        if (!mounted) return;
+
+        // Hard boundary on sign-out: purge all in-memory state AND force a
+        // full reload so no previous user's data can leak into the next
+        // render (React Query cache, component state, refs, etc.).
+        if (event === 'SIGNED_OUT') {
+          setSession(null);
+          setUser(null);
+          setProfile(null);
+          setLoading(false);
+          if (typeof window !== 'undefined' && window.location.pathname !== '/auth') {
+            window.location.replace('/auth');
+          }
+          return;
+        }
+
+        setSession(nextSession);
+        setUser(nextSession?.user ?? null);
+
+        if (nextSession?.user) {
+          // Defer the profile fetch out of the auth callback (Supabase best practice).
+          const uid = nextSession.user.id;
           setTimeout(() => {
             supabase
               .from('profiles')
               .select('id, full_name')
-              .eq('id', session.user.id)
+              .eq('id', uid)
               .single()
               .then(({ data }) => {
-                if (data) {
+                if (!mounted) return;
+                // Guard: only apply if this is still the active user.
+                if (data && data.id === uid) {
                   setProfile({
                     ...data,
                     role: 'teacher', // Actual role fetched by useUserRole hook
@@ -68,17 +89,37 @@ export const useAuthState = () => {
       }
     );
 
-    // Check for existing session
-    supabase.auth.getSession().then(({ data: { session } }) => {
-      setSession(session);
-      setUser(session?.user ?? null);
-      if (!session) {
+    // THEN check for an existing session (re-validate with the auth server
+    // via getUser so a stale/forged token in localStorage can't impersonate).
+    (async () => {
+      const { data: { session: existing } } = await supabase.auth.getSession();
+      if (!mounted) return;
+      if (!existing) {
         setLoading(false);
+        return;
       }
-    });
+      const { data: userData, error: userErr } = await supabase.auth.getUser();
+      if (!mounted) return;
+      if (userErr || !userData?.user) {
+        // Token invalid/expired — clear it so no ghost session lingers.
+        await supabase.auth.signOut({ scope: 'local' });
+        setSession(null);
+        setUser(null);
+        setProfile(null);
+        setLoading(false);
+        return;
+      }
+      setSession(existing);
+      setUser(userData.user);
+      setLoading(false);
+    })();
 
-    return () => subscription.unsubscribe();
+    return () => {
+      mounted = false;
+      subscription.unsubscribe();
+    };
   }, []);
+
 
   const signUp = async (email: string, password: string, fullName: string, college?: string) => {
     const redirectUrl = `${window.location.origin}/`;
@@ -115,9 +156,27 @@ export const useAuthState = () => {
   };
 
   const signOut = async () => {
-    // Use 'local' scope so signing out only affects THIS device/browser,
-    // not all active sessions for the user across other devices.
-    await supabase.auth.signOut({ scope: 'local' });
+    // 'local' scope: only this browser/device is signed out — never touches
+    // other users' sessions on other devices. Then hard-clear in-memory
+    // state and any per-user cached drafts so no data can leak into the
+    // next login on this browser.
+    try {
+      await supabase.auth.signOut({ scope: 'local' });
+    } catch (e) {
+      console.warn('signOut error (continuing to purge local state):', e);
+    }
+    setUser(null);
+    setSession(null);
+    setProfile(null);
+    try {
+      // Best-effort purge of Supabase auth token(s) in case the SDK left any.
+      Object.keys(window.localStorage)
+        .filter((k) => k.startsWith('sb-') && k.endsWith('-auth-token'))
+        .forEach((k) => window.localStorage.removeItem(k));
+    } catch { /* noop */ }
+    if (typeof window !== 'undefined') {
+      window.location.replace('/auth');
+    }
   };
 
   const refreshProfile = async () => {

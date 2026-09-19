@@ -74,9 +74,16 @@ export const useTestVersions = () => {
     for (let i = 0; i < metadata.number_of_versions; i++) {
       let versionQuestions = [...selectedQuestions];
 
-      // Shuffle questions if enabled
-      if (metadata.shuffle_questions) {
+      // If the selectedQuestions contain explicit `question_number` values (Generation Plan),
+      // DO NOT shuffle the question order — the TOS is the single source of truth.
+      const hasExplicitNumbers = versionQuestions.some(q => Number.isInteger((q as any).question_number));
+      if (metadata.shuffle_questions && !hasExplicitNumbers) {
         versionQuestions = shuffleArray(versionQuestions);
+      }
+
+      // If explicit question numbers are present, ensure questions are ordered by that number
+      if (hasExplicitNumbers) {
+        versionQuestions.sort((a, b) => (Number((a as any).question_number) || 0) - (Number((b as any).question_number) || 0));
       }
 
       // Shuffle answer choices if enabled
@@ -87,7 +94,7 @@ export const useTestVersions = () => {
       // Create answer key for this version
       const answerKey: Record<string, string> = {};
       versionQuestions.forEach((question, index) => {
-        const questionNumber = (index + 1).toString();
+        const questionNumber = hasExplicitNumbers ? String((question as any).question_number || index + 1) : String(index + 1);
         if (question.correct_answer) {
           answerKey[questionNumber] = question.correct_answer;
         }
@@ -154,7 +161,7 @@ export const useTestVersions = () => {
         const testQuestions = version.questions.map((question, index) => ({
           test_version_id: versionRecord.id,
           question_id: question.id,
-          question_number: index + 1,
+          question_number: (question as any).question_number || index + 1,
           shuffled_choices: question.choices || null,
           correct_answer_key: question.correct_answer || null,
           points: metadata.points_per_question

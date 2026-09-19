@@ -1,5 +1,5 @@
 import { useQuery, useMutation, useQueryClient } from "@tanstack/react-query";
-import { AcademicHierarchy } from "@/services/db/academicHierarchy";
+import { AcademicHierarchy, type SubjectType } from "@/services/db/academicHierarchy";
 import { toast } from "sonner";
 
 export function useAcademicHierarchy() {
@@ -86,14 +86,14 @@ export function useAcademicHierarchy() {
   });
 
   const createSubject = useMutation({
-    mutationFn: ({ specializationId, code, description }: { specializationId: string; code: string; description: string }) =>
-      AcademicHierarchy.createSubject(specializationId, code, description),
+    mutationFn: ({ specializationId, code, description, subjectType, courseCodes }: { specializationId: string; code: string; description: string; subjectType?: SubjectType; courseCodes?: string[] }) =>
+      AcademicHierarchy.createSubject(specializationId, code, description, subjectType ?? "major", courseCodes ?? []),
     onSuccess: () => { invalidateAll(); toast.success("Subject created"); },
     onError: () => toast.error("Failed to create subject"),
   });
 
   const updateSubject = useMutation({
-    mutationFn: ({ id, updates }: { id: string; updates: { code?: string; description?: string } }) =>
+    mutationFn: ({ id, updates }: { id: string; updates: { code?: string; description?: string; subject_type?: SubjectType; course_codes?: string[] } }) =>
       AcademicHierarchy.updateSubject(id, updates),
     onSuccess: () => { invalidateAll(); toast.success("Subject updated"); },
     onError: () => toast.error("Failed to update subject"),
