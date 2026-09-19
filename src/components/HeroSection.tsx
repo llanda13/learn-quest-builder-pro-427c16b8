@@ -15,7 +15,7 @@ export const HeroSection = ({ onGetStarted, onLearnMore }: HeroSectionProps) => 
       <div className="absolute inset-0">
         <img 
           src={heroImage} 
-          alt="Educational background" 
+          alt="Students studying in a modern classroom setting" 
           className="w-full h-full object-cover opacity-30"
         />
         <div className="absolute inset-0 bg-gradient-to-br from-primary/80 via-secondary/60 to-accent/40"></div>

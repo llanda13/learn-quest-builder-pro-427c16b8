@@ -22,13 +22,27 @@ import {
   AlertDialogTrigger,
 } from "@/components/ui/alert-dialog";
 
-// Subject prefixes considered "minor / general" — these subjects are taken across
-// multiple courses, so the Course field must remain manually editable instead of
-// being auto-filled from the Subjects database.
-const MINOR_SUBJECT_PREFIXES = ['GE', 'PE', 'NSTP'];
-const isMinorSubjectCode = (code: string) => {
-  const prefix = code.trim().toUpperCase().split(/\s+/)[0] ?? '';
-  return MINOR_SUBJECT_PREFIXES.includes(prefix);
+// Subject categories are resolved from the central subject database
+// (academic_subjects.subject_type), never from hardcoded code prefixes.
+// - major : belongs to a single program -> Course auto-filled (e.g., BSIT)
+// - minor / ge / pe / nstp : shared programs -> Course auto-filled "BSIT & BSIS"
+// The Course field stays editable so users can override the default.
+const SHARED_COURSE_LABEL = 'BSIT & BSIS';
+
+
+const SUBJECT_TYPE_LABELS: Record<string, string> = {
+  major: 'Major',
+  minor: 'Minor (shared)',
+  ge: 'General Education',
+  pe: 'PE',
+  nstp: 'NSTP',
+};
+
+// Map a specialization name (e.g., "IT", "IS", "BSIT") to a program code.
+const toProgramCode = (s?: string): string | undefined => {
+  const trimmed = (s ?? '').trim();
+  if (!trimmed) return undefined;
+  return /^BS/i.test(trimmed) ? trimmed.toUpperCase() : `BS${trimmed.toUpperCase()}`;
 };
 import { Alert, AlertDescription } from "@/components/ui/alert";
 import { Progress } from "@/components/ui/progress";
@@ -58,6 +72,7 @@ import { ExamFormatSelector, SelectedFormatSummary } from "@/components/generati
 import { EXAM_FORMATS, getDefaultFormat, getExamFormat } from "@/types/examFormats";
 import { clearPersistedState } from "@/hooks/usePersistentState";
 import { supabase } from "@/integrations/supabase/client";
+import { AcademicHierarchy } from "@/services/db/academicHierarchy";
 import { useAuth } from "@/lib/auth";
 
 // localStorage key for the in-progress TOS draft. Bumped versions invalidate
@@ -65,8 +80,8 @@ import { useAuth } from "@/lib/auth";
 const TOS_DRAFT_KEY = "lovable.persist.v1.tos-builder-draft";
 
 const topicSchema = z.object({
-  topic: z.string().min(1, "Topic name is required"),
-  hours: z.number().min(0.5, "Minimum 0.5 hours required")
+  topic: z.string(),
+  hours: z.union([z.number(), z.literal("")])
 });
 
 const tosSchema = z.object({
@@ -96,24 +111,27 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
   const templateApplied = useRef(false);
   const autoFilledRef = useRef(false);
   const { user } = useAuth();
-  const [subjectLookupStatus, setSubjectLookupStatus] = useState<'idle' | 'looking' | 'found' | 'missing'>('idle');
+  const [subjectTypeLabel, setSubjectTypeLabel] = useState<string | null>(null);
+  const [subjectLookupStatus, setSubjectLookupStatus] = useState<'idle' | 'looking' | 'found' | 'missing' | 'error'>('idle');
   const [isMinorSubject, setIsMinorSubject] = useState(false);
-  const [subjectSuggestions, setSubjectSuggestions] = useState<string[]>([]);
   const [showClearConfirm, setShowClearConfirm] = useState(false);
   
   // Hydrate topics from any saved draft so refresh / tab switch doesn't wipe input.
-  const [topics, setTopics] = useState<{ topic: string; hours: number }[]>(() => {
-    if (typeof window === "undefined") return [{ topic: "", hours: 0 }];
+  const [topics, setTopics] = useState<{ topic: string; hours: number | "" }[]>(() => {
+    if (typeof window === "undefined") return [{ topic: "", hours: "" }];
     try {
       const raw = window.localStorage.getItem(TOS_DRAFT_KEY);
       if (raw) {
         const parsed = JSON.parse(raw);
         if (Array.isArray(parsed?.topics) && parsed.topics.length > 0) {
-          return parsed.topics;
+          return parsed.topics.map((t: any) => ({
+            topic: typeof t?.topic === "string" ? t.topic : "",
+            hours: typeof t?.hours === "number" && t.hours > 0 ? t.hours : ""
+          }));
         }
       }
     } catch { /* ignore */ }
-    return [{ topic: "", hours: 0 }];
+    return [{ topic: "", hours: "" }];
   });
   const [tosMatrix, setTosMatrix] = useState<CanonicalTOSMatrix | null>(null);
   const [autoGeneratePending, setAutoGeneratePending] = useState(false);
@@ -125,6 +143,10 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
   const [generationStatus, setGenerationStatus] = useState("");
   const [collaborators, setCollaborators] = useState<any[]>([]);
   const [selectedFormatId, setSelectedFormatId] = useState(getDefaultFormat().id);
+  const [missingFields, setMissingFields] = useState<{ label: string; elementId: string }[]>([]);
+  const [showIncompleteDialog, setShowIncompleteDialog] = useState(false);
+  const [showConfirmGenerate, setShowConfirmGenerate] = useState(false);
+
 
   // Real-time collaboration setup
   const { users: presenceUsers, isConnected } = usePresence('tos-builder', {
@@ -199,33 +221,37 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
       console.log("📋 Loading TOS template:", template);
       
       // Parse topics from template
-      let parsedTopics: { topic: string; hours: number }[] = [{ topic: "", hours: 0 }];
+      let parsedTopics: { topic: string; hours: number | "" }[] = [{ topic: "", hours: "" }];
       
       if (template.topics) {
         if (Array.isArray(template.topics)) {
           // Topics is an array format
           parsedTopics = template.topics.map((t: any) => ({
             topic: t.topic || t.name || "",
-            hours: t.hours || 0
+            hours: typeof t.hours === "number" && t.hours > 0 ? t.hours : ""
           }));
         } else if (typeof template.topics === 'object') {
           // Topics might be an object with topic names as keys
           parsedTopics = Object.entries(template.topics).map(([name, data]: [string, any]) => ({
             topic: name,
-            hours: typeof data === 'object' ? (data.hours || 0) : 0
+            hours: typeof data === 'object' && typeof data.hours === "number" && data.hours > 0
+              ? data.hours
+              : ""
           }));
         }
       } else if (template.distribution && typeof template.distribution === 'object') {
         // Try to extract topics from distribution if topics array is missing
         parsedTopics = Object.keys(template.distribution).map(topicName => ({
           topic: topicName,
-          hours: template.distribution[topicName]?.hours || 3
+          hours: typeof template.distribution[topicName]?.hours === "number" && template.distribution[topicName]?.hours > 0
+            ? template.distribution[topicName]?.hours
+            : ""
         }));
       }
       
       // Ensure at least one topic
       if (parsedTopics.length === 0) {
-        parsedTopics = [{ topic: "", hours: 0 }];
+        parsedTopics = [{ topic: "", hours: "" }];
       }
       
       // Update topics state
@@ -310,164 +336,111 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
     })();
   }, [user?.id, setValue, form]);
 
-  // ─── Subject lookup: ONE retrieval path for every subject type.
-  // Step 1: retrieve the whole subjects table (cached) and match the entered
-  // code locally — no subject_type filtering anywhere. Step 2: apply the course
-  // mapping based on the classification stored on the retrieved record.
-  const normalizeCode = (v: string) =>
-    v.toUpperCase().replace(/[\s._-]+/g, '').trim();
-
-  type SubjectRow = {
-    code: string;
-    description: string | null;
-    subject_type: string | null;
-    course_codes: string[] | null;
-    specialization: string | null;
-  };
-
-  const subjectCacheRef = useRef<SubjectRow[] | null>(null);
-
-  const loadSubjects = async (): Promise<SubjectRow[]> => {
-    if (subjectCacheRef.current) return subjectCacheRef.current;
-    const { data, error } = await supabase
-      .from('academic_subjects')
-      .select('code, description, subject_type, course_codes, academic_specializations(name)')
-      .eq('deleted', false)
-      .limit(5000);
-    if (error) throw error;
-    subjectCacheRef.current = ((data ?? []) as any[]).map((r) => ({
-      code: r.code,
-      description: r.description,
-      subject_type: r.subject_type,
-      course_codes: r.course_codes,
-      specialization: r.academic_specializations?.name ?? null,
-    }));
-    return subjectCacheRef.current;
-  };
-
-
+  // ─── Subject lookup: when the user enters/changes Subject No, fetch the
+  // matching subject record from the centralized Subjects database and
+  // auto-fill Subject Description + Course. Case-insensitive code match.
   const lookupSubject = async (rawCode: string) => {
     const code = rawCode.trim();
     if (!code) {
       setSubjectLookupStatus('idle');
       setIsMinorSubject(false);
-      setSubjectSuggestions([]);
+      setSubjectTypeLabel(null);
       return;
     }
     setSubjectLookupStatus('looking');
     try {
-      const norm = normalizeCode(code);
-      const all = await loadSubjects();
-      const withNorm = all.map(r => ({ row: r, n: normalizeCode(r.code ?? '') }));
+      const subject = await AcademicHierarchy.lookupSubjectByCode(code);
 
-      // Tiered match — every tier searches the SAME single result set.
-      let rows = withNorm.filter(c => c.n === norm).map(c => c.row);
-      if (rows.length === 0) rows = withNorm.filter(c => c.n.startsWith(norm)).map(c => c.row);
-      if (rows.length === 0) rows = withNorm.filter(c => c.n.includes(norm)).map(c => c.row);
-
-      if (rows.length === 0) {
-        // Offer close matches sharing the alphabetic prefix (e.g. "IT 1" → ITPC/ITCC…)
-        const alpha = (norm.match(/^[A-Z]+/) ?? [''])[0];
-        const digits = (norm.match(/\d+/) ?? [''])[0];
-        const near = withNorm
-          .filter(c => {
-            if (!alpha) return false;
-            const cAlpha = (c.n.match(/^[A-Z]+/) ?? [''])[0];
-            const cDigits = (c.n.match(/\d+/) ?? [''])[0];
-            const alphaHit = cAlpha.startsWith(alpha) || alpha.startsWith(cAlpha);
-            return alphaHit && (!digits || cDigits.endsWith(digits));
-          })
-          .map(c => c.row.code)
-          .slice(0, 6);
-        setSubjectSuggestions(near);
+      if (!subject) {
+        // Query succeeded, but no record exists in the central subject database.
         setSubjectLookupStatus('missing');
         setIsMinorSubject(false);
+        setSubjectTypeLabel(null);
         return;
       }
 
-      setSubjectSuggestions([]);
+      const subjectType = (subject.subject_type ?? 'major').toLowerCase();
+      setIsMinorSubject(false);
+      setSubjectTypeLabel(SUBJECT_TYPE_LABELS[subjectType] ?? 'Major');
 
-      // Classification from the retrieved record is the single source of truth.
-      const SHARED_TYPES = ['ge', 'pe', 'nstp', 'minor'];
-      const types = rows.map(r => (r.subject_type ?? '').toLowerCase());
-      const shared = types.some(t => SHARED_TYPES.includes(t));
-      setIsMinorSubject(shared);
-
-      const description = rows.find(r => r.description?.trim())?.description ?? undefined;
-
-      // Programs come from the record's course_codes; when a major record has no
-      // explicit course_codes we fall back to its specialization (IT → BSIT, IS → BSIS).
-      const specToProgram = (spec: string | null): string | null => {
-        const s = (spec ?? '').trim().toUpperCase();
-        if (s === 'IT') return 'BSIT';
-        if (s === 'IS') return 'BSIS';
-        return null;
-      };
-
-      const programs = Array.from(
-        new Set(
-          rows.flatMap(r => {
-            const codes = (r.course_codes ?? [])
-              .map(c => c?.trim().toUpperCase())
-              .filter(Boolean) as string[];
-            if (codes.length > 0) return codes;
-            const fallback = specToProgram(r.specialization);
-            return fallback ? [fallback] : [];
-          })
-        )
-      ).sort((a, b) => (a === 'BSIT' ? -1 : b === 'BSIT' ? 1 : a.localeCompare(b)));
-
-      const course = shared
-        ? 'BSIT & BSIS'
-        : programs.length > 0
-          ? programs.join(' & ')
-          : '';
-
-
-      if (description) setValue('description', description, { shouldDirty: true, shouldValidate: true });
-      if (course) {
-        setValue('course', course, { shouldDirty: true, shouldValidate: true });
+      // Subject Description always comes from the central database.
+      if (subject.description) {
+        setValue('description', subject.description, { shouldDirty: true, shouldValidate: true });
       }
+
+      // Resolve the course(s) the subject belongs to, from stored metadata first.
+      const stored = (subject.course_codes ?? [])
+        .map((c) => String(c).trim().toUpperCase())
+        .filter(Boolean);
+      const fromSpecialization = toProgramCode(subject.specialization_name);
+      const courses = stored.length > 0 ? stored : (fromSpecialization ? [fromSpecialization] : []);
+
+      // Course is auto-filled for EVERY subject type (still editable in the UI).
+      // Major -> the single owning program. Minor / GE / NSTP / PE -> shared label.
+      const courseValue = subjectType === 'major'
+        ? (courses[0] ?? SHARED_COURSE_LABEL)
+        : (courses.length > 1 ? courses.join(' & ') : SHARED_COURSE_LABEL);
+      setValue('course', courseValue, { shouldDirty: true, shouldValidate: true });
+
 
       setSubjectLookupStatus('found');
     } catch (err) {
       console.warn('Subject lookup failed:', err);
-      setSubjectSuggestions([]);
-      setSubjectLookupStatus('missing');
+      // A failed query is NOT a "subject not found" result.
+      setSubjectLookupStatus('error');
+      setSubjectTypeLabel(null);
     }
   };
-
-
 
   const watchedTotalItems = watch("total_items");
   const watchedSubjectNo = watch("subject_no");
 
-  // Re-run the database lookup whenever the Subject No changes (persisted draft,
-  // template reuse, file upload, manual typing) so Description + Course always
-  // come from the central subject database instead of a prefix guess.
+  // Re-run the central lookup whenever Subject No changes from any source
+  // (persisted draft, template reuse, uploaded TOS) so category/description
+  // always reflect the database record.
   useEffect(() => {
-    if (typeof watchedSubjectNo === 'string' && watchedSubjectNo.trim()) {
-      lookupSubject(watchedSubjectNo);
-    } else {
-      setIsMinorSubject(false);
+    const code = typeof watchedSubjectNo === 'string' ? watchedSubjectNo.trim() : '';
+    if (!code) {
       setSubjectLookupStatus('idle');
+      setIsMinorSubject(false);
+      setSubjectTypeLabel(null);
+      return;
     }
+    const t = setTimeout(() => { void lookupSubject(code); }, 400);
+    return () => clearTimeout(t);
     // eslint-disable-next-line react-hooks/exhaustive-deps
   }, [watchedSubjectNo]);
-
 
   // ─── Clear / New TOS ─────────────────────────────────────────────────────
   // Wipes the entire builder back to a fresh state without a page refresh.
   // Re-applies the user's institutional defaults so the form is immediately ready.
   const handleClearForm = async () => {
-    const blankTopics = [{ topic: "", hours: 0 }];
+    const blankTopics = [{ topic: "", hours: "" as number | "" }];
+
+    // Reset every validation / error / dialog state so the form looks untouched.
+    setTopicErrors({});
+    setMissingFields([]);
+    setShowIncompleteDialog(false);
+    setShowConfirmGenerate(false);
+    setShowClearConfirm(false);
+    setAutoGeneratePending(false);
+    setIsGeneratingTest(false);
+    setGenerationProgress(0);
+    setGenerationStatus("");
+    setCollaborators([]);
+
+    // Reset TOS data state.
     setTopics(blankTopics);
     setTosMatrix(null);
     setShowMatrix(false);
     setSufficiencyAnalysis(null);
     setSubjectLookupStatus('idle');
     setIsMinorSubject(false);
+    setSubjectTypeLabel(null);
     setSelectedFormatId(getDefaultFormat().id);
+    templateApplied.current = false;
+
+    // Reset React Hook Form to pristine defaults, clearing errors, dirty, touched, submitted flags.
     reset({
       subject_no: "",
       course: "",
@@ -481,6 +454,12 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
       checked_by: "",
       noted_by: "",
       topics: blankTopics,
+    }, {
+      keepDirty: false,
+      keepErrors: false,
+      keepIsSubmitted: false,
+      keepTouched: false,
+      keepValues: false,
     });
     try {
       window.localStorage.removeItem(TOS_DRAFT_KEY);
@@ -512,8 +491,11 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
 
 
 
+  // Per-row inline validation errors for topics / hours
+  const [topicErrors, setTopicErrors] = useState<Record<number, { topic?: string; hours?: string }>>({});
+
   const addTopic = () => {
-    const newTopics = [...topics, { topic: "", hours: 0 }];
+    const newTopics = [...topics, { topic: "", hours: "" as number | "" }];
     setTopics(newTopics);
     setValue("topics", newTopics);
   };
@@ -531,19 +513,54 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
     newTopics[index] = { ...newTopics[index], [field]: value };
     setTopics(newTopics);
     setValue("topics", newTopics);
+    // Clear the inline error for the edited cell as soon as the user types.
+    setTopicErrors((prev) => {
+      if (!prev[index]?.[field === "topic" ? "topic" : "hours"]) return prev;
+      const next = { ...prev, [index]: { ...prev[index] } };
+      delete next[index][field === "topic" ? "topic" : "hours"];
+      if (!next[index].topic && !next[index].hours) delete next[index];
+      return next;
+    });
   };
 
   const onSubmit = (data: TOSFormData) => {
     try {
-      // Validate and convert topics to required format
-      const validTopics = data.topics
-        .filter(t => t.topic && t.hours > 0)
-        .map(t => ({ topic: t.topic!, hours: t.hours! }));
-      
-      if (validTopics.length === 0) {
-        toast.error("Please add at least one topic with hours");
+      // ─── Row-level validation: every topic row must have a name AND hours ───
+      const rows = topics;
+      const rowErrors: Record<number, { topic?: string; hours?: string }> = {};
+      let firstInvalidId: string | null = null;
+
+      rows.forEach((t, index) => {
+        const name = (t?.topic ?? "").trim();
+        const hours = t?.hours;
+        if (!name) {
+          rowErrors[index] = { ...rowErrors[index], topic: "Learning competency is required." };
+          if (!firstInvalidId) firstInvalidId = `topic-${index}`;
+        }
+        if (hours === "" || hours === undefined || hours === null || Number.isNaN(hours)) {
+          rowErrors[index] = { ...rowErrors[index], hours: "Instructional hours are required." };
+          if (!firstInvalidId) firstInvalidId = `hours-${index}`;
+        } else if (Number(hours) <= 0) {
+          rowErrors[index] = { ...rowErrors[index], hours: "Hours must be greater than 0." };
+          if (!firstInvalidId) firstInvalidId = `hours-${index}`;
+        }
+      });
+
+      if (rows.length === 0) {
+        toast.error("Please add at least one topic with instructional hours");
         return;
       }
+
+      setTopicErrors(rowErrors);
+
+      if (Object.keys(rowErrors).length > 0) {
+        toast.error("Please complete all Learning Competencies and Instructional Hours fields before submitting.");
+        if (firstInvalidId) focusField(firstInvalidId);
+        return; // Do not calculate the matrix or save any partial TOS record.
+      }
+
+      const validTopics = rows.map((t) => ({ topic: t.topic!.trim(), hours: Number(t.hours) }));
+
 
       // Use the canonical calculator
       const matrix = calculateCanonicalTOSMatrix({
@@ -639,6 +656,98 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
     }
   };
 
+  // ─── Pre-generation TOS validation ───
+  // Every required TOS field must be present and consistent before any
+  // question generation is allowed. Returns the list of problems found.
+  const collectTOSProblems = (): { label: string; elementId: string }[] => {
+    const values = form.getValues();
+    const problems: { label: string; elementId: string }[] = [];
+    const req = (value: unknown, label: string, elementId: string) => {
+      if (typeof value !== "string" || value.trim() === "") {
+        problems.push({ label, elementId });
+      }
+    };
+
+    req(tosMatrix?.subject_no ?? values.subject_no, "Subject No.", "subjectNo");
+    req(tosMatrix?.course ?? values.course, "Course", "course");
+    req(tosMatrix?.description ?? values.description, "Subject Description", "subjectDescription");
+    req(tosMatrix?.year_section ?? values.year_section, "Year & Section", "yearSection");
+    req(tosMatrix?.exam_period ?? values.exam_period, "Exam Period", "examPeriod");
+    req(tosMatrix?.school_year ?? values.school_year, "School Year", "schoolYear");
+    req(tosMatrix?.semester ?? values.semester, "Semester", "semester");
+
+    const totalItems = tosMatrix?.total_items ?? values.total_items;
+    if (!totalItems || Number.isNaN(totalItems) || totalItems < 10 || totalItems > 100) {
+      problems.push({ label: "Total Items (must be between 10 and 100)", elementId: "totalItems" });
+    }
+
+    const topicList = tosMatrix?.topics ?? topics;
+    const namedTopics = (topicList || []).filter((t) => (t?.topic ?? "").trim() !== "");
+    if (namedTopics.length === 0) {
+      problems.push({ label: "Learning Competencies / Topics", elementId: "topic-0" });
+    } else {
+      const missingHoursIndex = (topicList || []).findIndex(
+        (t) => (t?.topic ?? "").trim() !== "" && (t?.hours === "" || !t?.hours || Number(t?.hours) <= 0),
+      );
+      if (missingHoursIndex >= 0) {
+        problems.push({
+          label: "Instructional Hours (every topic needs hours greater than 0)",
+          elementId: `hours-${missingHoursIndex}`,
+        });
+      }
+    }
+
+    // Bloom's Taxonomy distribution must exist and sum exactly to Total Items.
+    if (tosMatrix) {
+      const bloomTotals = tosMatrix.bloom_totals || ({} as Record<string, number>);
+      const bloomSum = Object.values(bloomTotals).reduce((a, b) => a + (b || 0), 0);
+      if (bloomSum === 0) {
+        problems.push({ label: "Bloom's Taxonomy Distribution", elementId: "totalItems" });
+      } else if (bloomSum !== tosMatrix.total_items) {
+        problems.push({
+          label: `Bloom's Taxonomy Distribution (totals ${bloomSum} but Total Items is ${tosMatrix.total_items})`,
+          elementId: "totalItems",
+        });
+      }
+    }
+
+    return problems;
+  };
+
+  const focusField = (elementId: string) => {
+    const el = document.getElementById(elementId) as HTMLElement | null;
+    if (!el) return;
+    el.scrollIntoView({ behavior: "smooth", block: "center" });
+    el.classList.add("ring-2", "ring-destructive", "ring-offset-2", "rounded-md");
+    try {
+      el.focus({ preventScroll: true });
+    } catch { /* non-focusable */ }
+    window.setTimeout(() => {
+      el.classList.remove("ring-2", "ring-destructive", "ring-offset-2", "rounded-md");
+    }, 6000);
+  };
+
+  const handleGoBackToTOS = () => {
+    const first = missingFields[0];
+    setShowIncompleteDialog(false);
+    setShowMatrix(false);
+    window.setTimeout(() => {
+      if (first) focusField(first.elementId);
+    }, 250);
+  };
+
+  // Entry point for the "Generate Test Questionnaire" button.
+  const requestGenerateTest = () => {
+    const problems = collectTOSProblems();
+    if (problems.length > 0) {
+      setMissingFields(problems);
+      setShowIncompleteDialog(true);
+      return;
+    }
+    setShowConfirmGenerate(true);
+  };
+
+
   const handleGenerateTest = async () => {
     if (!tosMatrix) {
       toast.error("TOS data missing. Please generate the matrix first.");
@@ -720,24 +829,33 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
       setGenerationProgress(20);
       setGenerationStatus("Analyzing TOS matrix and building criteria...");
       
-      // Build criteria from the canonical TOS matrix
+      // Build criteria from the canonical TOS matrix preserving explicit item placement
       const criteria: TOSCriteria[] = [];
       const bloomLevels: BloomLevel[] = ['remembering', 'understanding', 'applying', 'analyzing', 'evaluating', 'creating'];
 
       for (const [topicName, topicData] of Object.entries(tosMatrix.distribution)) {
         for (const level of bloomLevels) {
           const count = topicData[level].count;
+          const itemNumbers = topicData[level].items || topicData[level]; // Handle both .count + .items structure and direct array
           
           if (count > 0) {
+            const questionType = ['remembering', 'understanding', 'applying'].includes(level)
+              ? 'mcq'
+              : 'essay';
+
+            const knowledgeDimension = level === 'remembering' ? 'Factual'
+              : level === 'applying' ? 'Procedural'
+              : (level === 'creating' || level === 'evaluating') ? 'Metacognitive'
+              : 'Conceptual';
+
             criteria.push({
               topic: topicName,
               bloom_level: level,
-              knowledge_dimension: level === 'remembering' ? 'Factual' 
-                : level === 'applying' ? 'Procedural' 
-                : (level === 'creating' || level === 'evaluating') ? 'Metacognitive' 
-                : 'Conceptual',
+              knowledge_dimension: knowledgeDimension,
               difficulty: getDifficultyForBloom(level),
               count,
+              item_numbers: Array.isArray(itemNumbers) ? itemNumbers : undefined,
+              question_type: questionType
             });
           }
         }
@@ -874,7 +992,7 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
                   variant="default"
                   size="lg"
                   className="px-8 py-3"
-                  onClick={handleGenerateTest}
+                  onClick={requestGenerateTest}
                   disabled={isGeneratingTest || isAnalyzing}
                 >
                   {isGeneratingTest ? (
@@ -892,7 +1010,65 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
             </div>
           </CardContent>
         </Card>
+
+        {/* TOS incomplete — blocks generation */}
+        <AlertDialog open={showIncompleteDialog} onOpenChange={setShowIncompleteDialog}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle className="flex items-center gap-2 text-destructive">
+                <AlertTriangle className="h-5 w-5" />
+                TOS Incomplete
+              </AlertDialogTitle>
+              <AlertDialogDescription asChild>
+                <div className="space-y-3">
+                  <p>
+                    The Test Questionnaire cannot be generated yet. Please complete the
+                    following required field{missingFields.length > 1 ? "s" : ""}:
+                  </p>
+                  <ul className="list-disc pl-5 space-y-1 text-foreground">
+                    {missingFields.map((f) => (
+                      <li key={f.elementId + f.label}>{f.label}</li>
+                    ))}
+                  </ul>
+                  {missingFields.length > 1 && (
+                    <p className="text-xs">
+                      You will be taken to the first incomplete field: <strong>{missingFields[0]?.label}</strong>.
+                    </p>
+                  )}
+                </div>
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogAction onClick={handleGoBackToTOS}>Go Back to TOS</AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
+
+        {/* Final confirmation before generation */}
+        <AlertDialog open={showConfirmGenerate} onOpenChange={setShowConfirmGenerate}>
+          <AlertDialogContent>
+            <AlertDialogHeader>
+              <AlertDialogTitle>TOS is complete</AlertDialogTitle>
+              <AlertDialogDescription>
+                All required Table of Specification fields are valid. Do you want to proceed
+                with generating the Test Questionnaire?
+              </AlertDialogDescription>
+            </AlertDialogHeader>
+            <AlertDialogFooter>
+              <AlertDialogCancel>Cancel</AlertDialogCancel>
+              <AlertDialogAction
+                onClick={() => {
+                  setShowConfirmGenerate(false);
+                  handleGenerateTest();
+                }}
+              >
+                Generate Questions
+              </AlertDialogAction>
+            </AlertDialogFooter>
+          </AlertDialogContent>
+        </AlertDialog>
       </div>
+
     );
   }
 
@@ -932,7 +1108,10 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
 
 
           <TOSUploadParser onParsed={(data) => {
-            const parsedTopics = data.topics.length > 0 ? data.topics : [{ topic: "", hours: 0 }];
+            const parsedTopics = (data.topics.length > 0 ? data.topics : [{ topic: "", hours: 0 }]).map(t => ({
+              topic: t.topic || "",
+              hours: typeof t.hours === "number" && t.hours > 0 ? t.hours : "" as number | ""
+            }));
             setTopics(parsedTopics);
             
             const formData = {
@@ -962,7 +1141,7 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
             if (!formData.school_year) missingFields.push("School Year");
             if (!formData.semester) missingFields.push("Semester");
             
-            const hasValidTopics = parsedTopics.some(t => t.topic && t.hours > 0);
+            const hasValidTopics = parsedTopics.some(t => t.topic && typeof t.hours === "number" && t.hours > 0);
             if (!hasValidTopics) missingFields.push("Topics with hours");
 
             if (missingFields.length > 0) {
@@ -996,15 +1175,17 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
                   <p className="text-xs text-muted-foreground mt-1">Looking up subject…</p>
                 )}
                 {subjectLookupStatus === 'found' && (
-                  <p className="text-xs text-primary mt-1">Course & description auto-filled from Subjects database.</p>
-                )}
-                {subjectLookupStatus === 'missing' && (
-                  <p className="text-xs text-amber-600 mt-1">
-                    Subject not found in central database — please ask an admin to add it.
-                    {subjectSuggestions.length > 0 && (
-                      <> Did you mean: {subjectSuggestions.join(', ')}?</>
-                    )}
+                  <p className="text-xs text-primary mt-1">
+                    {subjectTypeLabel ? `${subjectTypeLabel} subject — ` : ''}
+                    course &amp; description auto-filled from the central subject database.
                   </p>
+                )}
+
+                {subjectLookupStatus === 'missing' && (
+                  <p className="text-xs text-amber-600 mt-1">Subject not found in central database — please ask an admin to add it.</p>
+                )}
+                {subjectLookupStatus === 'error' && (
+                  <p className="text-xs text-destructive mt-1">Could not reach the subject database. Please try again.</p>
                 )}
                 {errors.subject_no && (
                   <p className="text-sm text-destructive mt-1">{errors.subject_no.message}</p>
@@ -1013,20 +1194,17 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
 
               <div>
                 <Label htmlFor="course">
-                  Course <span className="text-xs text-muted-foreground">(auto)</span>
+                  Course{' '}
+                  <span className="text-xs text-muted-foreground">(auto — editable)</span>
                 </Label>
                 <Input
                   id="course"
                   {...register("course")}
                   placeholder="Auto-filled from Subject No."
-                  readOnly
-                  className="bg-muted/40"
                 />
-                {isMinorSubject && (
-                  <p className="text-xs text-muted-foreground mt-1">
-                    Shared subject — course(s) taken from the central subject database.
-                  </p>
-                )}
+                <p className="text-xs text-muted-foreground mt-1">
+                  Auto-filled from the central subject database. You can edit it before saving.
+                </p>
                 {errors.course && (
                   <p className="text-sm text-destructive mt-1">{errors.course.message}</p>
                 )}
@@ -1039,9 +1217,9 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
                 <Input
                   id="subjectDescription"
                   {...register("description")}
-                  placeholder="Auto-filled from Subject No."
-                  readOnly
-                  className="bg-muted/40"
+                  placeholder={subjectLookupStatus === 'found' ? 'Auto-filled from Subject No.' : 'Enter subject description'}
+                  readOnly={subjectLookupStatus === 'found'}
+                  className={subjectLookupStatus === 'found' ? 'bg-muted/40' : ''}
                 />
                 {errors.description && (
                   <p className="text-sm text-destructive mt-1">{errors.description.message}</p>
@@ -1179,21 +1357,34 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
                   <div key={index} className="flex gap-3 items-start">
                     <div className="flex-1">
                       <Input
+                        id={`topic-${index}`}
                         placeholder="Topic/Learning Competency"
                         value={topic.topic}
+                        aria-invalid={!!topicErrors[index]?.topic}
+                        className={topicErrors[index]?.topic ? "border-destructive focus-visible:ring-destructive" : undefined}
                         onChange={(e) => updateTopic(index, "topic", e.target.value)}
                       />
+                      {topicErrors[index]?.topic && (
+                        <p className="text-sm text-destructive mt-1">{topicErrors[index]?.topic}</p>
+                      )}
                     </div>
-                    <div className="w-24">
+                    <div className="w-40">
                       <Input
+                        id={`hours-${index}`}
                         type="number"
                         placeholder="Hours"
                         step="0.5"
                         min="0.5"
-                        value={topic.hours || ""}
-                        onChange={(e) => updateTopic(index, "hours", parseFloat(e.target.value) || 0)}
+                        value={topic.hours}
+                        aria-invalid={!!topicErrors[index]?.hours}
+                        className={topicErrors[index]?.hours ? "border-destructive focus-visible:ring-destructive" : undefined}
+                        onChange={(e) => updateTopic(index, "hours", e.target.value === "" ? "" : parseFloat(e.target.value))}
                       />
+                      {topicErrors[index]?.hours && (
+                        <p className="text-sm text-destructive mt-1">{topicErrors[index]?.hours}</p>
+                      )}
                     </div>
+
                     {topics.length > 1 && (
                       <Button
                         type="button"
