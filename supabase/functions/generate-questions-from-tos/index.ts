@@ -983,7 +983,72 @@ function validateBloomEnforcement(
       };
     }
   }
-  
+
+  // ============= STRICT PER-BLOOM STEM VERB ENFORCEMENT =============
+  // Ensures the actual phrasing of the stem reflects the assigned cognitive
+  // demand — not just item placement in the TOS. Rejects Understanding/
+  // Analyzing-style "Explain why…" / "Describe how…" stems when the slot is
+  // supposed to be Remembering, and vice versa.
+  const level = bloomLevel.toLowerCase();
+
+  if (level === 'remembering') {
+    const recallSignals = /\b(define|identify|list|name|state|recall|recognize|label|which\s+(term|word|name)|what\s+is\s+the\s+(term|name|definition))\b/i;
+    const higherOrderVerbs = /^\s*(explain|describe|analyz|compare|contrast|evaluate|justify|assess|design|develop|propose|create|construct|examine|differentiate|critique|formulate)/i;
+    if (higherOrderVerbs.test(questionText)) {
+      return { valid: false, reason: 'Remembering items must use recall verbs (define, identify, list, name, state) — not explain/describe/analyze/etc.' };
+    }
+    if (!recallSignals.test(questionText)) {
+      return { valid: false, reason: 'Remembering items must ask for direct recall (define, identify, list, name, state, "what is the term/name")' };
+    }
+  }
+
+  if (level === 'understanding') {
+    const understandingSignals = /\b(explain|describe|summarize|interpret|classify|paraphrase|which\s+(best\s+)?(describes|explains|summarizes|illustrates)|what\s+does\s+.+\s+mean|why\s+is|why\s+does|how\s+does\s+.+\s+(work|function|relate|represent))\b/i;
+    const higherOrderVerbs = /^\s*(design|develop|construct|propose|create|formulate|evaluate|justify|critique|assess|analyz|differentiate|examine|compare\s+and\s+contrast)/i;
+    if (higherOrderVerbs.test(questionText)) {
+      return { valid: false, reason: 'Understanding items must use comprehension verbs (explain, describe, summarize, interpret) — not design/analyze/evaluate/etc.' };
+    }
+    if (!understandingSignals.test(questionText)) {
+      return { valid: false, reason: 'Understanding items must ask learners to explain meaning, describe, summarize, interpret, or classify' };
+    }
+  }
+
+  if (level === 'applying') {
+    const applyingSignals = /\b(apply|use|solve|demonstrate|implement|execute|calculate|compute|carry\s+out|which\s+(step|action|command|method)\s+would|how\s+would\s+you\s+(use|apply|solve|implement))\b/i;
+    const forbiddenStart = /^\s*(define|list|name|state|recall|identify|label|explain|describe|summarize|interpret|classify|paraphrase|compare|contrast|differentiate|distinguish|analyz|examine|deconstruct|evaluate|justify|critique|assess|judge|defend|prioritize|recommend|design|develop|construct|propose|create|formulate|devise|plan|compose)\b/i;
+    if (forbiddenStart.test(questionText)) {
+      return { valid: false, reason: 'Applying items must open with an action verb (Apply, Use, Solve, Demonstrate, Implement, Execute, Calculate) — forbidden: define/list/explain/describe/compare/analyze/evaluate/design/etc.' };
+    }
+    if (!applyingSignals.test(questionText)) {
+      return { valid: false, reason: 'Applying items must ask learners to use/apply/solve/demonstrate/implement knowledge in a scenario' };
+    }
+  }
+
+  if (level === 'analyzing') {
+    const analyzingSignals = /\b(differentiate|distinguish|compare|contrast|examine|analyz|deconstruct|attribute|organize|break\s+down|what\s+is\s+the\s+relationship|how\s+does\s+.+\s+differ|which\s+(part|component|factor)\s+contributes)\b/i;
+    const forbiddenStart = /^\s*(define|list|name|state|recall|identify|label|explain|describe|summarize|interpret|classify|paraphrase|apply|use|solve|demonstrate|implement|execute|calculate|compute|evaluate|justify|critique|assess|judge|defend|prioritize|recommend|design|develop|construct|propose|create|formulate|devise|plan|compose)\b/i;
+    if (forbiddenStart.test(questionText)) {
+      return { valid: false, reason: 'Analyzing items must open with Differentiate/Distinguish/Compare/Contrast/Examine/Analyze/Deconstruct — forbidden: define/list/explain/apply/evaluate/design/etc.' };
+    }
+    if (!analyzingSignals.test(questionText)) {
+      return { valid: false, reason: 'Analyzing items must ask learners to differentiate, compare, examine, or break down components/relationships' };
+    }
+  }
+
+  if (level === 'evaluating') {
+    const forbiddenStart = /^\s*(define|list|name|state|recall|identify|label|explain|describe|summarize|interpret|classify|paraphrase|apply|use|solve|demonstrate|implement|execute|calculate|compute|compare|contrast|differentiate|distinguish|analyz|examine|deconstruct|design|develop|construct|propose|create|formulate|devise|plan|compose)\b/i;
+    if (forbiddenStart.test(questionText)) {
+      return { valid: false, reason: 'Evaluating items must open with Evaluate/Justify/Critique/Assess/Judge/Defend/Prioritize/Recommend or a "Which is MOST/BEST…" stem — forbidden: define/explain/apply/analyze/design/etc.' };
+    }
+  }
+
+  if (level === 'creating') {
+    const forbiddenStart = /^\s*(define|list|name|state|recall|identify|label|explain|describe|summarize|interpret|classify|paraphrase|apply|use|solve|demonstrate|implement|execute|calculate|compute|compare|contrast|differentiate|distinguish|analyz|examine|deconstruct|evaluate|justify|critique|assess|judge|defend|prioritize|recommend)\b/i;
+    if (forbiddenStart.test(questionText)) {
+      return { valid: false, reason: 'Creating items must open with Design/Develop/Construct/Propose/Formulate/Devise/Plan/Compose/Generate/Produce — forbidden: define/explain/compare/evaluate/etc.' };
+    }
+  }
+
   return { valid: true };
 }
 
@@ -1554,16 +1619,20 @@ async function generateMCQQuestions(
                       BLOOM_COGNITIVE_OPERATIONS_ENHANCED.understanding;
   
   const questionsSpec = intents.map((intent, idx) => `
-Question ${idx + 1}:
+Question ${idx + 1}  ⟶  TOS SLOT #${intent.slot.itemNumber} (PRE-ASSIGNED — DO NOT CHANGE):
+  ASSIGNED ITEM NUMBER: ${intent.slot.itemNumber}   (this item's position in the final TQ is fixed by the TOS)
   ASSIGNED TOPIC (MANDATORY ANCHOR): "${topic}"
+  ASSIGNED BLOOM LEVEL (MANDATORY): "${bloom}"
+  ASSIGNED DIFFICULTY: "${intent.difficulty}"
+  ASSIGNED QUESTION TYPE: "${intent.questionType}"
   FOCUS CONCEPT: "${intent.concept}"
   REQUIRED COGNITIVE OPERATION: "${intent.operation}"
   COGNITIVE REQUIREMENT: ${bloomConfig.requirement}
-  DIFFICULTY: "${intent.difficulty}"
 
-  RULES FOR THIS ITEM:
+  RULES FOR THIS ITEM (TOS BLUEPRINT IS LAW):
+  • You are ONLY authoring the question content for pre-assigned TOS slot #${intent.slot.itemNumber}. You MUST NOT alter its topic, Bloom level, difficulty, question type, or position.
   • The stem AND every option MUST be about "${topic}" — never generic "systems", "frameworks", or "methodologies" content.
-  • The correct answer must demonstrate ${intent.operation} on "${topic}" specifically.
+  • The stem MUST demonstrate the "${bloom}" cognitive demand (${intent.operation}) — not a higher or lower Bloom level.
   • Do NOT reuse boilerplate sentence structures from previous items in this batch.
   • Reject any generic educational template — every item must be topic-specific and academically substantive.
 `).join('\n');
@@ -1572,32 +1641,49 @@ Question ${idx + 1}:
   
   // Bloom-specific question structure requirements
   const bloomRequirements: Record<string, string> = {
-    'Remembering': `Questions must ask for direct recall of specific facts, definitions, or terms.
-    FORMAT: "What is...?", "Which term describes...?", "Define..."`,
-    
-    'Understanding': `Questions must require explaining MEANING or SIGNIFICANCE, not just naming.
-    FORMAT: "Why is X important?", "What does X mean in the context of...?", "Explain the relationship between..."
-    FORBIDDEN: Simple identification or listing`,
-    
-    'Applying': `Questions MUST present a specific SCENARIO or PROBLEM to solve.
-    FORMAT: "Given [scenario], how would you...?", "In the following situation..., what approach...?"
-    REQUIRED: A concrete situation where knowledge must be USED
-    FORBIDDEN: Abstract questions without scenarios`,
-    
-    'Analyzing': `Questions MUST require breaking down and identifying RELATIONSHIPS between components.
-    FORMAT: "How does X relate to Y?", "What distinguishes X from Y?", "Examine the interaction between..."
-    REQUIRED: Comparison, contrast, or relationship identification
-    FORBIDDEN: "What are the key factors?" or any listing pattern`,
-    
-    'Evaluating': `Questions MUST require making a JUDGMENT or ASSESSMENT with criteria.
-    FORMAT: "Which approach is MOST effective for...?", "Evaluate the advantages of X over Y for..."
-    REQUIRED: A verdict (best, most appropriate, most effective) WITH justification
-    FORBIDDEN: Questions that merely ask to describe or list`,
-    
-    'Creating': `Questions MUST require DESIGNING, PLANNING, or PRODUCING something new.
-    FORMAT: "Design a solution for...", "How would you construct...?", "Develop an approach to..."
-    REQUIRED: Tangible output - a design, plan, or new combination
-    FORBIDDEN: Questions that only ask to explain or describe existing concepts`
+    'Remembering': `Direct recall of specific facts, definitions, or terms.
+    REQUIRED STARTING VERBS (pick one): Define, Identify, List, Name, State, Recall, Recognize, Label, "Which term…", "What is the definition of…", "What is the name of…"
+    EXAMPLES:
+      • "Define the term 'framework' in software engineering."
+      • "Which term describes a self-contained unit of code executed on demand?"
+      • "List the four primary phases of the SDLC."
+    FORBIDDEN VERBS/PATTERNS: Explain, Describe, Analyze, Compare, Evaluate, Justify, Design, Develop, "Why is…", "How does…contribute…", "Discuss the significance of…".
+    A Remembering stem must be answerable from memory in one short factual answer — NOT reasoning or explanation.`,
+
+    'Understanding': `Comprehension — explain meaning, describe, summarize, interpret, or classify.
+    REQUIRED STARTING VERBS: Explain, Describe, Summarize, Interpret, Classify, Paraphrase, "What does X mean…", "Which best describes…", "Why is X important…", "How does X work…"
+    EXAMPLES:
+      • "Explain the purpose of version control in a collaborative software project."
+      • "Which statement best describes the relationship between HTML and CSS?"
+    FORBIDDEN VERBS: Design, Develop, Construct, Propose, Create, Formulate, Evaluate, Justify, Critique, Assess, Differentiate. Not simple recall ("Define…", "List…").`,
+
+    'Applying': `USE knowledge to solve a NEW problem or scenario.
+    REQUIRED STARTING VERBS: Apply, Use, Solve, Demonstrate, Implement, Execute, Calculate, Compute, "How would you use…", "Which command/step would…"
+    EXAMPLES:
+      • "Given a table of student grades, which SQL query would return the average grade per course?"
+      • "Apply the FIFO scheduling algorithm to the following process burst times: …"
+    REQUIRED: A concrete scenario, dataset, code excerpt, or situation the learner must act on. Abstract "define/explain" stems are FORBIDDEN.`,
+
+    'Analyzing': `Break down information and identify RELATIONSHIPS between components.
+    REQUIRED STARTING VERBS: Differentiate, Distinguish, Compare, Contrast, Examine, Analyze, Deconstruct, "How does X differ from Y…", "What is the relationship between…", "Which component contributes most to…"
+    EXAMPLES:
+      • "Differentiate between authentication and authorization in a web application."
+      • "Examine how normalization reduces redundancy in the given relational schema."
+    FORBIDDEN: "What are the key factors…", any pure listing, or simple recall/explanation.`,
+
+    'Evaluating': `Make a JUDGMENT with CRITERIA and JUSTIFICATION.
+    REQUIRED STARTING VERBS: Evaluate, Justify, Critique, Assess, Judge, Defend, Prioritize, Recommend, "Which is MOST effective/appropriate…", "Which approach is BEST for…"
+    EXAMPLES:
+      • "Evaluate which of the following architectures is most appropriate for a low-latency chat system, and why."
+      • "Which testing strategy provides the strongest defect-detection for legacy code, and what is the trade-off?"
+    FORBIDDEN: Pure describe/explain/list stems without a verdict or criteria.`,
+
+    'Creating': `PRODUCE something NEW — a design, plan, or solution.
+    REQUIRED STARTING VERBS: Design, Develop, Construct, Propose, Formulate, Devise, Plan, Compose, Generate, Produce, "How would you design/construct…"
+    EXAMPLES:
+      • "Design a database schema that supports multi-tenant SaaS with row-level isolation."
+      • "Propose an incident-response plan for a ransomware attack affecting a hospital's EMR."
+    FORBIDDEN: Explain/describe/analyze-only stems. Must call for a tangible new artifact (design, plan, blueprint, proposal).`
   };
   
   const subjectAnchor = subjectCtx ? renderSubjectAnchor(subjectCtx) + '\n\n' : '';
