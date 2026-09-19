@@ -1,0 +1,3 @@
+ALTER TABLE public.generated_tests DROP CONSTRAINT IF EXISTS generated_tests_validation_status_check;
+ALTER TABLE public.generated_tests ADD CONSTRAINT generated_tests_validation_status_check CHECK (validation_status = ANY (ARRAY['draft'::text, 'pending_validation'::text, 'validated'::text, 'revision_requested'::text]));
+ALTER TABLE public.generated_tests ALTER COLUMN validation_status SET DEFAULT 'draft';
