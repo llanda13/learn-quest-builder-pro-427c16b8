@@ -1,0 +1,147 @@
+{
+  "id": "local-sample-1784343825094",
+  "title": "Sample Generated Test (Demo)",
+  "items": [
+    {
+      "id": "ai-1-1784343825093",
+      "question_text": "(Philippine Literature) [Remembering - easy] Generate content for item 1.",
+      "question_type": "mcq",
+      "choices": {
+        "A": "Option A",
+        "B": "Option B",
+        "C": "Option C",
+        "D": "Option D"
+      },
+      "correct_answer": "A",
+      "created_by": "ai",
+      "topic": "Philippine Literature",
+      "bloom_level": "Remembering",
+      "difficulty": "easy",
+      "question_number": 1
+    },
+    {
+      "id": "ai-2-1784343825094",
+      "question_text": "(Philippine Literature) [Remembering - easy] Generate content for item 2.",
+      "question_type": "mcq",
+      "choices": {
+        "A": "Option A",
+        "B": "Option B",
+        "C": "Option C",
+        "D": "Option D"
+      },
+      "correct_answer": "A",
+      "created_by": "ai",
+      "topic": "Philippine Literature",
+      "bloom_level": "Remembering",
+      "difficulty": "easy",
+      "question_number": 2
+    },
+    {
+      "id": "ai-3-1784343825094",
+      "question_text": "(RA 1425 Rizal Law) [Applying - average] Generate content for item 3.",
+      "question_type": "mcq",
+      "choices": {
+        "A": "Option A",
+        "B": "Option B",
+        "C": "Option C",
+        "D": "Option D"
+      },
+      "correct_answer": "A",
+      "created_by": "ai",
+      "topic": "RA 1425 Rizal Law",
+      "bloom_level": "Applying",
+      "difficulty": "average",
+      "question_number": 3
+    },
+    {
+      "id": "ai-4-1784343825094",
+      "question_text": "(RA 1425 Rizal Law) [Applying - average] Generate content for item 4.",
+      "question_type": "mcq",
+      "choices": {
+        "A": "Option A",
+        "B": "Option B",
+        "C": "Option C",
+        "D": "Option D"
+      },
+      "correct_answer": "A",
+      "created_by": "ai",
+      "topic": "RA 1425 Rizal Law",
+      "bloom_level": "Applying",
+      "difficulty": "average",
+      "question_number": 4
+    },
+    {
+      "id": "ai-5-1784343825094",
+      "question_text": "(Constitution) [Analyzing - difficult] Generate content for item 5.",
+      "question_type": "essay",
+      "choices": {
+        "A": "Option A",
+        "B": "Option B",
+        "C": "Option C",
+        "D": "Option D"
+      },
+      "correct_answer": "A",
+      "created_by": "ai",
+      "topic": "Constitution",
+      "bloom_level": "Analyzing",
+      "difficulty": "difficult",
+      "question_number": 5
+    },
+    {
+      "id": "ai-6-1784343825094",
+      "question_text": "(Constitution) [Analyzing - difficult] Generate content for item 6.",
+      "question_type": "essay",
+      "choices": {
+        "A": "Option A",
+        "B": "Option B",
+        "C": "Option C",
+        "D": "Option D"
+      },
+      "correct_answer": "A",
+      "created_by": "ai",
+      "topic": "Constitution",
+      "bloom_level": "Analyzing",
+      "difficulty": "difficult",
+      "question_number": 6
+    }
+  ],
+  "answer_key": [
+    {
+      "question_number": 1,
+      "question_id": "ai-1-1784343825093",
+      "correct_answer": "A",
+      "points": 1
+    },
+    {
+      "question_number": 2,
+      "question_id": "ai-2-1784343825094",
+      "correct_answer": "A",
+      "points": 1
+    },
+    {
+      "question_number": 3,
+      "question_id": "ai-3-1784343825094",
+      "correct_answer": "A",
+      "points": 1
+    },
+    {
+      "question_number": 4,
+      "question_id": "ai-4-1784343825094",
+      "correct_answer": "A",
+      "points": 1
+    },
+    {
+      "question_number": 5,
+      "question_id": "ai-5-1784343825094",
+      "correct_answer": "A",
+      "points": 5
+    },
+    {
+      "question_number": 6,
+      "question_id": "ai-6-1784343825094",
+      "correct_answer": "A",
+      "points": 5
+    }
+  ],
+  "generated_at": "2026-07-18T03:03:45.094Z"
+}

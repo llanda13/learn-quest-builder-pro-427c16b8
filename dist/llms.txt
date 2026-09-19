@@ -1,0 +1,10 @@
+# Blooms Builder
+
+> AI-integrated text bank for automatic test questionnaire (TQ) generation and Table of Specification (TOS) creation, aligned with Bloom's Taxonomy.
+
+Blooms Builder helps educators create professional assessments by generating and classifying questions using AI (NLP + Bloom's Taxonomy), organizing them into a subject-based question bank, and producing tests aligned with a Table of Specifications.
+
+## Pages
+
+- [Home](/): Overview of the platform and its assessment features.
+- [Sign In](/login): Teacher, admin, and validator sign-in.

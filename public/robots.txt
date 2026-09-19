@@ -12,3 +12,5 @@ Allow: /
 
 User-agent: *
 Allow: /
+
+Sitemap: https://test-bank-for-automatic-test-questionnaire.lovable.app/sitemap.xml
