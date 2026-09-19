@@ -18,10 +18,11 @@ interface GeneratedTest {
   points_per_question: number | null;
   created_at: string;
   items: any;
-  validation_status: 'pending_validation' | 'validated' | 'revision_requested';
+  validation_status: 'draft' | 'pending_validation' | 'validated' | 'revision_requested';
 }
 
 const STATUS_META: Record<GeneratedTest['validation_status'], { label: string; variant: 'default' | 'secondary' | 'destructive' | 'outline' }> = {
+  draft: { label: 'Draft — Editable', variant: 'outline' },
   pending_validation: { label: 'Pending Validation', variant: 'secondary' },
   validated: { label: 'Validated', variant: 'default' },
   revision_requested: { label: 'Revision Requested', variant: 'destructive' },
@@ -44,7 +45,7 @@ export default function MyTests() {
       if (!user) return;
 
       const [testsRes, profileRes] = await Promise.all([
-        supabase
+        (supabase as any)
           .from('generated_tests')
           .select('id, title, subject, course, exam_period, school_year, semester, points_per_question, created_at, items, validation_status')
           .eq('created_by', user.id)

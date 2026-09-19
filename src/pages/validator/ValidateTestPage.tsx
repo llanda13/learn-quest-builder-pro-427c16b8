@@ -18,6 +18,7 @@ import {
   SelectValue,
 } from "@/components/ui/select";
 import { useToast } from "@/hooks/use-toast";
+import { useUserRole } from "@/hooks/useUserRole";
 import { ArrowLeft, CheckCircle2, RotateCcw } from "lucide-react";
 import { TOSReferencePanel } from "@/components/TOSReferencePanel";
 
@@ -93,8 +94,10 @@ export default function ValidateTestPage() {
   const [test, setTest] = useState<any>(null);
   const [loading, setLoading] = useState(true);
 
-  // Section 1 — Expert Profile
+  // Section 1 — Expert Profile (identity is taken from the authenticated account)
   const [expertName, setExpertName] = useState("");
+  const [expertEmail, setExpertEmail] = useState("");
+  const [expertId, setExpertId] = useState("");
   const [expertPosition, setExpertPosition] = useState("");
   const [expertExperience, setExpertExperience] = useState("");
 
@@ -109,6 +112,8 @@ export default function ValidateTestPage() {
   const [generalComments, setGeneralComments] = useState("");
 
   const [submitting, setSubmitting] = useState(false);
+  const { isAdmin, isValidator } = useUserRole();
+  const evaluatorRole = isAdmin ? "admin" : isValidator ? "validator" : "";
 
   useEffect(() => {
     if (!testId) return;
@@ -126,12 +131,14 @@ export default function ValidateTestPage() {
       // Prefill expert name from profile
       const { data: auth } = await supabase.auth.getUser();
       if (auth.user) {
+        setExpertId(auth.user.id);
+        setExpertEmail(auth.user.email ?? "");
         const { data: prof } = await supabase
           .from("profiles")
           .select("full_name")
           .eq("id", auth.user.id)
           .maybeSingle();
-        if (prof?.full_name) setExpertName(prof.full_name);
+        setExpertName(prof?.full_name ?? "");
       }
       setLoading(false);
     })();
@@ -164,10 +171,10 @@ export default function ValidateTestPage() {
 
   const submit = async (decision: "approved" | "revision_requested") => {
     if (!testId) return;
-    if (!expertName.trim() || !expertPosition.trim() || !expertExperience) {
+    if (!expertPosition.trim() || !expertExperience) {
       toast({
         title: "Expert profile required",
-        description: "Please complete your full name, position, and years of experience.",
+        description: "Please complete your position and years of teaching experience.",
         variant: "destructive",
       });
       return;
@@ -213,7 +220,6 @@ export default function ValidateTestPage() {
         likert_scores: Object.fromEntries(
           Object.entries(likert).map(([k, v]) => [k, Number(v)]),
         ),
-        expert_full_name: expertName.trim(),
         expert_position: expertPosition.trim(),
         expert_experience: expertExperience,
         item_alignment_matrix: matrixArr,
@@ -255,9 +261,9 @@ export default function ValidateTestPage() {
   }
 
   return (
-    <div className="container mx-auto px-4 max-w-5xl">
-      {/* Fixed / sticky TOS reference panel */}
-      <div className="sticky top-0 z-30 -mx-4 px-4 pt-4 pb-3 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 border-b">
+    <div className="flex flex-col h-screen max-w-5xl mx-auto px-4">
+      {/* Fixed TOS reference panel (always visible) */}
+      <div className="shrink-0 pt-4 pb-3 bg-background border-b">
         <div className="flex items-center justify-between mb-3">
           <Button variant="outline" size="sm" onClick={() => navigate("/validator/pending")}>
             <ArrowLeft className="w-4 h-4 mr-2" />
@@ -274,11 +280,13 @@ export default function ValidateTestPage() {
           semester={test.semester}
           totalItems={items.length}
           items={items}
+          tosId={test.tos_id}
         />
       </div>
 
-      {/* Scrollable evaluation area */}
-      <div className="py-6 space-y-6">
+      {/* Independently scrollable evaluation area */}
+      <div className="flex-1 overflow-y-auto py-6 space-y-6 pr-1">
+
       <Card>
         <CardHeader>
           <CardTitle>Generated Test Questionnaire (TQ)</CardTitle>
@@ -328,20 +336,30 @@ export default function ValidateTestPage() {
         <CardHeader>
           <CardTitle>Section 1 — Expert Profile</CardTitle>
           <p className="text-sm text-muted-foreground">
-            Please provide your basic professional information.
+            Your name and account are taken automatically from your authenticated evaluator
+            account. Only your professional details below can be edited.
           </p>
         </CardHeader>
         <CardContent className="space-y-4">
           <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
-              <Label htmlFor="expert_name">Full Name</Label>
-              <Input
-                id="expert_name"
-                value={expertName}
-                onChange={(e) => setExpertName(e.target.value)}
-                placeholder="e.g. Juan D. Dela Cruz"
-              />
+              <Label htmlFor="expert_name">Full Name (from your evaluator account)</Label>
+              <Input id="expert_name" value={expertName} readOnly disabled className="bg-muted" />
             </div>
+            <div className="space-y-2">
+              <Label htmlFor="expert_email">Email (authenticated account)</Label>
+              <Input id="expert_email" value={expertEmail} readOnly disabled className="bg-muted" />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="expert_id">User ID</Label>
+              <Input id="expert_id" value={expertId} readOnly disabled className="bg-muted font-mono text-xs" />
+            </div>
+            <div className="space-y-2">
+              <Label htmlFor="expert_role">Evaluator Role</Label>
+              <Input id="expert_role" value={evaluatorRole} readOnly disabled className="bg-muted" />
+            </div>
+          </div>
+          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
             <div className="space-y-2">
               <Label htmlFor="expert_position">Current Position / Designation</Label>
               <Input

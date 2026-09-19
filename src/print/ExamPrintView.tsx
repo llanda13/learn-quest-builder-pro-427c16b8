@@ -75,6 +75,8 @@ export function ExamPrintView({ test, showAnswerKey = true }: ExamPrintViewProps
   const hasMultipleSections = items.some(q => q.section_id || q.section_label);
 
   // Group questions by section if multi-section format
+  // IMPORTANT: If items already contain `question_number` (from Generation Plan),
+  // preserve and respect those numbers — do not renumber or reassign positions.
   const sectionedQuestions = hasMultipleSections
     ? groupBySection(items)
     : groupByType(items);
@@ -285,33 +287,51 @@ export function ExamPrintView({ test, showAnswerKey = true }: ExamPrintViewProps
 // Group items that have section_id/section_label (format-aware generation)
 function groupBySection(items: TestItem[]): SectionGroup[] {
   const sectionMap = new Map<string, SectionGroup>();
-  
-  let questionNum = 1;
-  items.forEach(item => {
+
+  // If items include explicit question_number values (Generation Plan), use them.
+  const itemsWithNumbers = items.map(i => ({ ...i, question_number: i.question_number }));
+
+  itemsWithNumbers.forEach(item => {
     const sectionId = item.section_id || 'A';
     const sectionLabel = item.section_label || 'Section A';
     const sectionTitle = item.section_title || 'Questions';
-    
+
     if (!sectionMap.has(sectionId)) {
       sectionMap.set(sectionId, {
         id: sectionId,
         label: sectionLabel,
         title: sectionTitle,
         questionType: item.question_type || item.type || 'mcq',
-        startNumber: questionNum,
-        endNumber: questionNum,
+        startNumber: Number.isInteger(item.question_number) ? (item.question_number as number) : Infinity,
+        endNumber: Number.isInteger(item.question_number) ? (item.question_number as number) : -Infinity,
         pointsPerQuestion: item.points || 1,
         instruction: getSectionInstruction(item.question_type || item.type || 'mcq'),
         questions: []
       });
     }
-    
+
     const section = sectionMap.get(sectionId)!;
-    section.questions.push({ ...item, question_number: questionNum });
-    section.endNumber = questionNum;
-    questionNum++;
+    // Preserve provided question_number; if absent, push to end with temporary numbering
+    section.questions.push({ ...item });
+    if (Number.isInteger(item.question_number)) {
+      section.startNumber = Math.min(section.startNumber, item.question_number as number);
+      section.endNumber = Math.max(section.endNumber, item.question_number as number);
+    }
   });
-  
+
+  // Sort questions within each section by their explicit question_number when available,
+  // otherwise preserve insertion order for items without numbers.
+  sectionMap.forEach(section => {
+    section.questions.sort((a, b) => {
+      const an = Number.isInteger(a.question_number) ? (a.question_number as number) : Infinity;
+      const bn = Number.isInteger(b.question_number) ? (b.question_number as number) : Infinity;
+      return an - bn;
+    });
+    // Recompute start/end if still Infinity/-Infinity
+    if (section.startNumber === Infinity) section.startNumber = section.questions.length > 0 ? 1 : 0;
+    if (section.endNumber === -Infinity) section.endNumber = section.questions.length > 0 ? section.questions.length : 0;
+  });
+
   return Array.from(sectionMap.values());
 }
 
@@ -335,6 +355,8 @@ function groupByType(items: TestItem[]): SectionGroup[] {
   });
 
   const sections: SectionGroup[] = [];
+  // If items already have `question_number`, preserve ordering by that number.
+  const hasExplicitNumbers = items.some(i => Number.isInteger(i.question_number));
   let questionNum = 1;
   const sectionLabels = ['A', 'B', 'C', 'D', 'E'];
   let sectionIdx = 0;
@@ -347,25 +369,29 @@ function groupByType(items: TestItem[]): SectionGroup[] {
     points: number = 1
   ) => {
     if (questions.length === 0) return;
-    
-    const numberedQuestions = questions.map((q, idx) => ({
-      ...q,
-      question_number: questionNum + idx
-    }));
-    
+
+    // If explicit question numbers exist, sort and preserve them.
+    const qs = [...questions];
+    if (hasExplicitNumbers) {
+      qs.sort((a, b) => (Number(a.question_number) || 0) - (Number(b.question_number) || 0));
+    }
+
+    const startNumber = hasExplicitNumbers ? (Number(qs[0].question_number) || questionNum) : questionNum;
+    const endNumber = hasExplicitNumbers ? (Number(qs[qs.length - 1].question_number) || (startNumber + qs.length - 1)) : (questionNum + qs.length - 1);
+
     sections.push({
       id: sectionLabels[sectionIdx],
       label: `Section ${sectionLabels[sectionIdx]}`,
       title,
       questionType: type,
-      startNumber: questionNum,
-      endNumber: questionNum + questions.length - 1,
+      startNumber,
+      endNumber,
       pointsPerQuestion: points,
       instruction,
-      questions: numberedQuestions
+      questions: qs
     });
-    
-    questionNum += questions.length;
+
+    questionNum = hasExplicitNumbers ? Math.max(questionNum, endNumber + 1) : questionNum + questions.length;
     sectionIdx++;
   };
 

@@ -6,6 +6,7 @@ import { Table, TableBody, TableCell, TableHead, TableHeader, TableRow } from '@
 import { Badge } from '@/components/ui/badge';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Checkbox } from '@/components/ui/checkbox';
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, DialogTitle } from '@/components/ui/dialog';
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
@@ -18,7 +19,8 @@ interface UserWithRole {
   full_name: string;
   college: string | null;
   created_at: string;
-  role: 'admin' | 'teacher' | null;
+  role: 'admin' | 'teacher' | 'validator' | null;
+  roles: Array<'admin' | 'teacher' | 'validator'>;
 }
 
 interface UserFormData {
@@ -27,9 +29,10 @@ interface UserFormData {
   college: string;
   role: string;
   password: string;
+  evaluator: boolean;
 }
 
-const emptyForm: UserFormData = { email: '', full_name: '', college: '', role: 'teacher', password: '' };
+const emptyForm: UserFormData = { email: '', full_name: '', college: '', role: 'teacher', password: '', evaluator: false };
 
 export default function UserManagement() {
   const [users, setUsers] = useState<UserWithRole[]>([]);
@@ -59,8 +62,12 @@ export default function UserManagement() {
         .select('user_id, role');
       if (rolesError) throw rolesError;
 
-      const roleMap = new Map<string, 'admin' | 'teacher'>();
-      roles?.forEach(r => roleMap.set(r.user_id, r.role as 'admin' | 'teacher'));
+      const roleMap = new Map<string, Array<'admin' | 'teacher' | 'validator'>>();
+      roles?.forEach(r => {
+        const assigned = roleMap.get(r.user_id) || [];
+        assigned.push(r.role as 'admin' | 'teacher' | 'validator');
+        roleMap.set(r.user_id, assigned);
+      });
 
       setUsers((profiles || []).map(p => ({
         id: p.id,
@@ -68,7 +75,8 @@ export default function UserManagement() {
         full_name: p.full_name || '',
         college: p.college || null,
         created_at: p.created_at,
-        role: roleMap.get(p.id) || null,
+        roles: roleMap.get(p.id) || [],
+        role: (['admin', 'teacher', 'validator'] as const).find((candidate) => roleMap.get(p.id)?.includes(candidate)) || null,
       })));
     } catch (error) {
       console.error('Error fetching users:', error);
@@ -86,6 +94,7 @@ export default function UserManagement() {
       college: user.college || '',
       role: user.role || 'teacher',
       password: '',
+      evaluator: user.roles.includes('validator'),
     });
     setShowEditDialog(true);
   };
@@ -101,32 +110,79 @@ export default function UserManagement() {
         .eq('id', editUser.id);
       if (profileError) throw profileError;
 
+      // Desired role set: the primary role plus optional evaluator access.
+      const desired = new Set<'admin' | 'teacher' | 'validator'>();
+      desired.add((editForm.role as 'admin' | 'teacher' | 'validator') || 'teacher');
+      if (editForm.evaluator) desired.add('validator');
+      else if (editForm.role !== 'validator') desired.delete('validator');
+
+      const { error: clearError } = await supabase
+        .from('user_roles')
+        .delete()
+        .eq('user_id', editUser.id);
+      if (clearError) throw clearError;
+
+      const { error: roleError } = await supabase
+        .from('user_roles')
+        .insert([...desired].map((role) => ({ user_id: editUser.id, role })));
+      if (roleError) throw roleError;
+
+      const { data: persistedRoles, error: verifyRoleError } = await supabase
+        .from('user_roles')
+        .select('role')
+        .eq('user_id', editUser.id);
+      if (verifyRoleError) throw verifyRoleError;
+      const persisted = new Set((persistedRoles ?? []).map(({ role }) => role));
+      const mismatch = [...desired].some((role) => !persisted.has(role)) || persisted.size !== desired.size;
+      if (mismatch) {
+        throw new Error('Role changes were not saved. Please try again.');
+      }
+
+
       toast({ title: 'Success', description: 'User updated successfully.' });
       setShowEditDialog(false);
       fetchUsers();
-    } catch (error) {
+    } catch (error: any) {
       console.error('Error updating user:', error);
-      toast({ title: 'Error', description: 'Failed to update user.', variant: 'destructive' });
+      toast({ title: 'Error', description: error?.message || 'Failed to update user.', variant: 'destructive' });
+
     } finally {
       setSaving(false);
     }
   };
 
   const handleDelete = async () => {
-    if (!deleteUser) return;
+    if (!deleteUser?.id) {
+      toast({ title: 'Error', description: 'No user selected for deletion.', variant: 'destructive' });
+      return;
+    }
+
     try {
       setSaving(true);
-      // Delete role first, then profile
-      await supabase.from('user_roles').delete().eq('user_id', deleteUser.id);
-      const { error } = await supabase.from('profiles').delete().eq('id', deleteUser.id);
-      if (error) throw error;
 
-      toast({ title: 'Success', description: 'User deleted successfully.' });
+      const { error: rolesError } = await supabase
+        .from('user_roles')
+        .delete()
+        .eq('user_id', deleteUser.id);
+      if (rolesError) throw rolesError;
+
+      const { error: profileError } = await supabase
+        .from('profiles')
+        .delete()
+        .eq('id', deleteUser.id);
+      if (profileError) throw profileError;
+
+      setUsers((current) => current.filter((user) => user.id !== deleteUser.id));
+      toast({ title: 'Deleted successfully.', description: `${deleteUser.email} was removed.` });
       setDeleteUser(null);
-      fetchUsers();
-    } catch (error) {
+      await fetchUsers();
+    } catch (error: any) {
       console.error('Error deleting user:', error);
-      toast({ title: 'Error', description: 'Failed to delete user. You may need to remove this user from the Supabase Auth dashboard.', variant: 'destructive' });
+      toast({
+        title: 'Delete failed',
+        description: error?.message || 'Failed to delete user. Check the Supabase Auth dashboard and row-level security policies.',
+        variant: 'destructive',
+      });
     } finally {
       setSaving(false);
     }
@@ -137,44 +193,51 @@ export default function UserManagement() {
       toast({ title: 'Validation', description: 'Email and Full Name are required.', variant: 'destructive' });
       return;
     }
+    if (!addForm.password || addForm.password.length < 6) {
+      toast({ title: 'Validation', description: 'Temporary password must be at least 6 characters.', variant: 'destructive' });
+      return;
+    }
     try {
       setSaving(true);
 
-      // Sign up user via Supabase Auth
-      const { data: signUpData, error: signUpError } = await supabase.auth.signUp({
-        email: addForm.email,
-        password: addForm.password || 'ChangeMe123!',
-        options: {
-          data: { full_name: addForm.full_name },
+      // Account creation runs server-side with the service role so the admin's
+      // own session is never replaced and the chosen role is guaranteed to be
+      // written to user_roles (the call fails loudly and rolls back otherwise).
+      const { data, error } = await supabase.functions.invoke('admin-create-user', {
+        body: {
+          email: addForm.email,
+          full_name: addForm.full_name,
+          college: addForm.college,
+          password: addForm.password,
+          role: addForm.role,
         },
       });
-      if (signUpError) throw signUpError;
 
-      // Update college if provided
-      if (signUpData.user && addForm.college) {
-        await supabase
-          .from('profiles')
-          .update({ college: addForm.college })
-          .eq('id', signUpData.user.id);
+      const failure = (error as any)?.message || (data as any)?.error;
+      if (error || !data?.ok) {
+        throw new Error(failure || 'Account creation failed.');
       }
 
-      // Update role if not default teacher
-      if (signUpData.user && addForm.role === 'admin') {
-        await supabase.from('user_roles').delete().eq('user_id', signUpData.user.id);
-        await supabase.from('user_roles').insert([{ user_id: signUpData.user.id, role: 'admin' }]);
-      }
-
-      toast({ title: 'Success', description: `User ${addForm.email} added successfully. A confirmation email has been sent.` });
+      const assigned: string[] = data.roles ?? [];
+      toast({
+        title: 'Account created',
+        description: `${addForm.email} was created with role: ${assigned.map((r) => (r === 'validator' ? 'Evaluator' : r)).join(', ')}.`,
+      });
       setShowAddDialog(false);
       setAddForm(emptyForm);
-      fetchUsers();
+      await fetchUsers();
     } catch (error: any) {
       console.error('Error adding user:', error);
-      toast({ title: 'Error', description: error.message || 'Failed to add user.', variant: 'destructive' });
+      toast({
+        title: 'Account not created',
+        description: error?.message || 'Failed to create the account. No role was assigned.',
+        variant: 'destructive',
+      });
     } finally {
       setSaving(false);
     }
   };
+
 
   if (loading) {
     return (
@@ -195,7 +258,7 @@ export default function UserManagement() {
           <div className="flex items-center gap-2">
             <Button variant="default" onClick={() => { setAddForm(emptyForm); setShowAddDialog(true); }} size="sm">
               <Plus className="h-4 w-4 mr-2" />
-              Add Teacher
+              Add Account
             </Button>
             <Button variant="outline" onClick={fetchUsers} size="sm">
               <RefreshCw className="h-4 w-4 mr-2" />
@@ -226,9 +289,14 @@ export default function UserManagement() {
                     <TableCell>{user.full_name || '—'}</TableCell>
                     <TableCell>{user.college || '—'}</TableCell>
                     <TableCell>
-                      <Badge variant={user.role === 'admin' ? 'default' : 'secondary'}>
-                        {user.role || 'No Role'}
-                      </Badge>
+                      <div className="flex flex-wrap gap-1">
+                        {(user.roles.length ? user.roles : ['No Role']).map((role) => (
+                          <Badge key={role} variant={role === 'admin' ? 'default' : role === 'validator' ? 'outline' : 'secondary'}>
+                            {role === 'validator' ? 'Evaluator' : role}
+                          </Badge>
+
+                        ))}
+                      </div>
                     </TableCell>
                     <TableCell>
                       <div className="flex items-center gap-2">
@@ -270,7 +338,25 @@ export default function UserManagement() {
             </div>
             <div>
               <Label>Role</Label>
-              <Input value={editForm.role === 'admin' ? 'Admin' : 'Teacher'} disabled className="bg-muted" />
+              <Select
+                value={editForm.role}
+                onValueChange={(v) => setEditForm(f => ({ ...f, role: v, evaluator: v === 'validator' ? true : f.evaluator }))}
+              >
+                <SelectTrigger><SelectValue /></SelectTrigger>
+                <SelectContent>
+                  <SelectItem value="teacher">Teacher / User</SelectItem>
+                  <SelectItem value="admin">Admin</SelectItem>
+                  <SelectItem value="validator">Evaluator (Expert Validation)</SelectItem>
+                </SelectContent>
+              </Select>
+            </div>
+
+            <div className="flex items-start gap-3 rounded-md border p-3">
+              <Checkbox id="evaluator-access" checked={editForm.evaluator} onCheckedChange={(checked) => setEditForm(f => ({ ...f, evaluator: checked === true }))} />
+              <div className="space-y-1">
+                <Label htmlFor="evaluator-access">Evaluator access</Label>
+                <p className="text-xs text-muted-foreground">Allow this existing account to enter Expert Validation after password re-authentication.</p>
+              </div>
             </div>
           </div>
           <DialogFooter>
@@ -284,8 +370,11 @@ export default function UserManagement() {
       <Dialog open={showAddDialog} onOpenChange={setShowAddDialog}>
         <DialogContent>
           <DialogHeader>
-            <DialogTitle>Add Teacher</DialogTitle>
-            <DialogDescription>Register a new faculty member.</DialogDescription>
+            <DialogTitle>Add Account</DialogTitle>
+            <DialogDescription>
+              Register a teacher, administrator, or an authorized Evaluator (Dean / Chairperson).
+              Evaluators sign in with their own credentials to perform Expert Validation.
+            </DialogDescription>
           </DialogHeader>
           <div className="space-y-4 py-2">
             <div>
@@ -305,8 +394,9 @@ export default function UserManagement() {
               <Select value={addForm.role} onValueChange={v => setAddForm(f => ({ ...f, role: v }))}>
                 <SelectTrigger><SelectValue /></SelectTrigger>
                 <SelectContent>
-                  <SelectItem value="teacher">Teacher</SelectItem>
+                  <SelectItem value="teacher">Teacher / User</SelectItem>
                   <SelectItem value="admin">Admin</SelectItem>
+                  <SelectItem value="validator">Evaluator (Expert Validation)</SelectItem>
                 </SelectContent>
               </Select>
             </div>
@@ -326,14 +416,19 @@ export default function UserManagement() {
       <AlertDialog open={!!deleteUser} onOpenChange={(open) => { if (!open) setDeleteUser(null); }}>
         <AlertDialogContent>
           <AlertDialogHeader>
-            <AlertDialogTitle>Delete User</AlertDialogTitle>
+            <AlertDialogTitle>Delete Record?</AlertDialogTitle>
             <AlertDialogDescription>
-              Are you sure you want to permanently delete <strong>{deleteUser?.email}</strong>? This action cannot be undone.
+              Are you sure you want to delete this item? This action cannot be undone.
+              <div className="mt-2 font-medium text-foreground">{deleteUser?.email}</div>
             </AlertDialogDescription>
           </AlertDialogHeader>
           <AlertDialogFooter>
             <AlertDialogCancel>Cancel</AlertDialogCancel>
-            <AlertDialogAction onClick={handleDelete} className="bg-destructive text-destructive-foreground hover:bg-destructive/90">
+            <AlertDialogAction
+              onClick={handleDelete}
+              disabled={saving}
+              className="bg-destructive text-destructive-foreground hover:bg-destructive/90 disabled:opacity-60"
+            >
               {saving ? 'Deleting...' : 'Delete'}
             </AlertDialogAction>
           </AlertDialogFooter>

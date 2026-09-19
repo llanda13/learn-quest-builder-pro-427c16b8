@@ -4,7 +4,7 @@ import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
 import { Button } from "@/components/ui/button";
 import { Badge } from "@/components/ui/badge";
 import { Separator } from "@/components/ui/separator";
-import { ArrowLeft, Printer, Download, Key, Pencil } from "lucide-react";
+import { ArrowLeft, Printer, Download, Key, Pencil, Send, Lock } from "lucide-react";
 import { GeneratedTests } from "@/services/db/generatedTests";
 import { useToast } from "@/hooks/use-toast";
 import { usePDFExport } from "@/hooks/usePDFExport";
@@ -17,6 +17,7 @@ import { TOSReferencePanel } from "@/components/TOSReferencePanel";
 
 import { Dialog, DialogContent, DialogHeader, DialogTitle, DialogFooter } from "@/components/ui/dialog";
 import { Input } from "@/components/ui/input";
+import { Textarea } from "@/components/ui/textarea";
 import { Label } from "@/components/ui/label";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { supabase } from "@/integrations/supabase/client";
@@ -35,6 +36,8 @@ interface TestItem {
   difficulty?: string;
   bloom_level?: string;
   topic?: string;
+  /** Original position inside test.items — used for editing. */
+  __idx?: number;
 }
 
 interface GroupedQuestions {
@@ -50,7 +53,8 @@ function groupQuestionsByType(items: TestItem[]): GroupedQuestions {
   const shortAnswer: TestItem[] = [];
   const essay: TestItem[] = [];
 
-  for (const item of items) {
+  items.forEach((raw, originalIndex) => {
+    const item = { ...raw, __idx: originalIndex };
     const type = (item.question_type || item.type || '').toLowerCase();
     if (type === 'mcq' || type === 'multiple-choice' || type === 'multiple_choice') {
       mcq.push(item);
@@ -61,7 +65,7 @@ function groupQuestionsByType(items: TestItem[]): GroupedQuestions {
     } else if (type === 'essay') {
       essay.push(item);
     }
-  }
+  });
 
   let secondaryType: 'true_false' | 'short_answer' | null = null;
   let secondary: TestItem[] = [];
@@ -85,6 +89,20 @@ function groupQuestionsByType(items: TestItem[]): GroupedQuestions {
   return { mcq, secondary, essay, secondaryType };
 }
 
+const EDITABLE_STATUSES = ["draft", "revision_requested"];
+
+interface QuestionDraft {
+  index: number;
+  question_text: string;
+  question_type: string;
+  choices: { key: string; text: string }[];
+  correct_answer: string;
+  points: string;
+  difficulty: string;
+  bloom_level: string;
+  topic: string;
+}
+
 export default function GeneratedTestPage() {
   const { testId } = useParams<{ testId: string }>();
   const navigate = useNavigate();
@@ -97,6 +115,9 @@ export default function GeneratedTestPage() {
   const [editForm, setEditForm] = useState({ college: '', examType: '', subjectCode: '', subjectDescription: '', schoolYear: '', semester: '' });
   const [saving, setSaving] = useState(false);
   const [college, setCollege] = useState<string | null>(null);
+  const [questionDraft, setQuestionDraft] = useState<QuestionDraft | null>(null);
+  const [savingQuestion, setSavingQuestion] = useState(false);
+  const [submitting, setSubmitting] = useState(false);
   const { checkAndRepair, isRepairing } = useTestAutoRepair(testId);
 
   const renderModel = useExamRenderModel(test, { college, showAnswerKey });
@@ -260,6 +281,89 @@ export default function GeneratedTestPage() {
     }
   };
 
+  const openQuestionEditor = (item: TestItem, index: number) => {
+    const rawChoices = item.choices || item.options;
+    let choices: { key: string; text: string }[] = [];
+    if (rawChoices && !Array.isArray(rawChoices)) {
+      choices = Object.keys(rawChoices)
+        .sort()
+        .map((key) => ({ key, text: String((rawChoices as Record<string, string>)[key] ?? '') }));
+    } else if (Array.isArray(rawChoices)) {
+      choices = rawChoices.map((text, i) => ({ key: String.fromCharCode(65 + i), text: String(text) }));
+    }
+    setQuestionDraft({
+      index,
+      question_text: item.question_text || item.question || '',
+      question_type: (item.question_type || item.type || '').toLowerCase(),
+      choices,
+      correct_answer: String(item.correct_answer ?? item.correctAnswer ?? ''),
+      points: String(item.points ?? 1),
+      difficulty: item.difficulty || '',
+      bloom_level: item.bloom_level || '',
+      topic: item.topic || '',
+    });
+  };
+
+  const handleSaveQuestion = async () => {
+    if (!questionDraft || !testId) return;
+    if (!questionDraft.question_text.trim()) {
+      toast({ title: "Question text is required", variant: "destructive" });
+      return;
+    }
+    setSavingQuestion(true);
+    try {
+      const allItems: TestItem[] = Array.isArray(test?.items) ? test.items : [];
+      const original = allItems[questionDraft.index] || {};
+      const patch: Record<string, any> = {
+        question_text: questionDraft.question_text.trim(),
+        correct_answer: questionDraft.correct_answer.trim(),
+        points: Number(questionDraft.points) || 1,
+        difficulty: questionDraft.difficulty || null,
+        bloom_level: questionDraft.bloom_level || null,
+        topic: questionDraft.topic || null,
+      };
+      if ('question' in original) patch.question = patch.question_text;
+      if ('correctAnswer' in original) patch.correctAnswer = patch.correct_answer;
+      if (questionDraft.choices.length > 0) {
+        if (Array.isArray(original.choices) || Array.isArray(original.options)) {
+          const arr = questionDraft.choices.map((c) => c.text);
+          if (Array.isArray(original.options)) patch.options = arr;
+          else patch.choices = arr;
+        } else {
+          patch.choices = Object.fromEntries(questionDraft.choices.map((c) => [c.key, c.text]));
+        }
+      }
+
+      const updated = await GeneratedTests.updateItem(testId, questionDraft.index, patch);
+      setTest(updated);
+      setQuestionDraft(null);
+      toast({ title: "Question updated", description: "The draft questionnaire has been saved." });
+    } catch (error: any) {
+      console.error("Error saving question:", error);
+      toast({ title: "Save failed", description: error?.message ?? "Could not save the question.", variant: "destructive" });
+    } finally {
+      setSavingQuestion(false);
+    }
+  };
+
+  const handleSubmitForValidation = async () => {
+    if (!testId) return;
+    setSubmitting(true);
+    try {
+      const updated = await GeneratedTests.submitForValidation(testId);
+      setTest(updated);
+      toast({
+        title: "Submitted for Expert Validation",
+        description: "The questionnaire is now locked and queued for an Evaluator.",
+      });
+    } catch (error: any) {
+      console.error("Error submitting test:", error);
+      toast({ title: "Submission failed", description: error?.message ?? "Could not submit questionnaire.", variant: "destructive" });
+    } finally {
+      setSubmitting(false);
+    }
+  };
+
   if (loading) {
     return (
       <div className="container mx-auto py-8 space-y-6">
@@ -293,6 +397,8 @@ export default function GeneratedTestPage() {
   const items: TestItem[] = Array.isArray(test.items) ? test.items : [];
   const totalPoints = items.reduce((sum, item) => sum + (item.points || 1), 0);
   const groupedQuestions = groupQuestionsByType(items);
+  const isDraft = test.validation_status === "draft";
+  const isEditable = EDITABLE_STATUSES.includes(test.validation_status);
 
   const mcqStart = 1;
   const secondaryStart = mcqStart + groupedQuestions.mcq.length;
@@ -315,80 +421,110 @@ export default function GeneratedTestPage() {
   return (
     <>
       {/* Screen UI */}
-      <div className="container mx-auto py-8 space-y-6 screen-only">
-      {isRepairing && (
-        <div className="text-xs text-muted-foreground text-center">Refining test in background…</div>
-      )}
+      <div className="flex flex-col h-screen screen-only">
+        {/* Fixed top: banner, actions, TOS */}
+        <div className="shrink-0 border-b bg-background">
+          <div className="container mx-auto px-4 pt-6 pb-3 space-y-4">
+            {isRepairing && (
+              <div className="text-xs text-muted-foreground text-center">Refining test in background…</div>
+            )}
 
-      {/* Expert Validation status banner */}
-      {test.validation_status !== "validated" && (
-        <div
-          className={
-            "rounded-md border p-3 text-sm " +
-            (test.validation_status === "revision_requested"
-              ? "border-destructive/50 bg-destructive/10 text-destructive"
-              : "border-amber-500/50 bg-amber-500/10 text-amber-900 dark:text-amber-200")
-          }
-        >
-          <strong>
-            {test.validation_status === "revision_requested"
-              ? "Revision requested by Evaluator."
-              : "Awaiting Expert Validation."}
-          </strong>{" "}
-          Printing and PDF export are locked until this questionnaire is approved by an Evaluator.
+            {/* Draft / editable review banner */}
+            {isEditable && (
+              <div className="rounded-md border border-primary/40 bg-primary/5 p-3 text-sm flex flex-wrap items-center justify-between gap-3">
+                <div>
+                  <strong>
+                    {isDraft ? "Draft — editable review stage." : "Revision requested — this draft is editable again."}
+                  </strong>{" "}
+                  Review each question and use <em>Edit</em> to correct the text, choices, or correct
+                  answer. Nothing is sent to an Evaluator until you submit.
+                </div>
+                <Button onClick={handleSubmitForValidation} disabled={submitting}>
+                  <Send className="w-4 h-4 mr-2" />
+                  {submitting ? "Submitting…" : "Submit for Expert Validation"}
+                </Button>
+              </div>
+            )}
+
+            {test.validation_status === "pending_validation" && (
+              <div className="rounded-md border border-muted-foreground/30 bg-muted p-3 text-sm flex items-center gap-2">
+                <Lock className="w-4 h-4 shrink-0" />
+                <span>
+                  <strong>Locked — under Expert Validation.</strong> This submitted version can no
+                  longer be modified while an Evaluator reviews it.
+                </span>
+              </div>
+            )}
+
+            {/* Expert Validation status banner */}
+            {test.validation_status !== "validated" && !isEditable && (
+              <div
+                className={
+                  "rounded-md border p-3 text-sm " +
+                  (test.validation_status === "revision_requested"
+                    ? "border-destructive/50 bg-destructive/10 text-destructive"
+                    : "border-amber-500/50 bg-amber-500/10 text-amber-900 dark:text-amber-200")
+                }
+              >
+                <strong>
+                  {test.validation_status === "revision_requested"
+                    ? "Revision requested by Evaluator."
+                    : "Awaiting Expert Validation."}
+                </strong>{" "}
+                Printing and PDF export are locked until this questionnaire is approved by an Evaluator.
+              </div>
+            )}
+
+            {/* Action Buttons */}
+            <div className="flex items-center justify-between">
+              <Button variant="outline" onClick={handleBack}>
+                <ArrowLeft className="w-4 h-4 mr-2" />
+                Back to My Tests
+              </Button>
+              <div className="flex gap-2">
+                <Button variant="outline" onClick={() => setShowAnswerKey(!showAnswerKey)}>
+                  <Key className="w-4 h-4 mr-2" />
+                  {showAnswerKey ? "Hide" : "Show"} Answer Key
+                </Button>
+                <Button
+                  variant="outline"
+                  onClick={handlePrint}
+                  disabled={test.validation_status !== "validated"}
+                  title={test.validation_status !== "validated" ? "Awaiting expert validation" : undefined}
+                >
+                  <Printer className="w-4 h-4 mr-2" />
+                  Print
+                </Button>
+                <Button
+                  onClick={handleExport}
+                  disabled={test.validation_status !== "validated"}
+                  title={test.validation_status !== "validated" ? "Awaiting expert validation" : undefined}
+                >
+                  <Download className="w-4 h-4 mr-2" />
+                  Export PDF
+                </Button>
+              </div>
+            </div>
+
+            {/* Fixed TOS reference — always visible while reviewing the questionnaire */}
+            <TOSReferencePanel
+              title={test.title}
+              course={test.course}
+              subject={test.subject}
+              examPeriod={test.exam_period}
+              schoolYear={test.school_year}
+              semester={test.semester}
+              totalItems={items.length}
+              items={items as any}
+              tosId={test.tos_id}
+            />
+          </div>
         </div>
-      )}
 
-      {/* Action Buttons */}
-      <div className="flex items-center justify-between">
-        <Button variant="outline" onClick={handleBack}>
-          <ArrowLeft className="w-4 h-4 mr-2" />
-          Back to My Tests
-        </Button>
-        <div className="flex gap-2">
-          <Button variant="outline" onClick={() => setShowAnswerKey(!showAnswerKey)}>
-            <Key className="w-4 h-4 mr-2" />
-            {showAnswerKey ? "Hide" : "Show"} Answer Key
-          </Button>
-          <Button
-            variant="outline"
-            onClick={handlePrint}
-            disabled={test.validation_status !== "validated"}
-            title={test.validation_status !== "validated" ? "Awaiting expert validation" : undefined}
-          >
-            <Printer className="w-4 h-4 mr-2" />
-            Print
-          </Button>
-          <Button
-            onClick={handleExport}
-            disabled={test.validation_status !== "validated"}
-            title={test.validation_status !== "validated" ? "Awaiting expert validation" : undefined}
-          >
-            <Download className="w-4 h-4 mr-2" />
-            Export PDF
-          </Button>
-        </div>
-      </div>
+        {/* Independently scrollable questionnaire area */}
+        <div className="flex-1 overflow-y-auto">
+          <div className="container mx-auto px-4 py-6 space-y-6">
 
-
-
-      {/* Sticky TOS reference — always visible while reviewing the questionnaire */}
-      <div className="sticky top-0 z-30 -mx-4 px-4 py-3 bg-background/95 backdrop-blur supports-[backdrop-filter]:bg-background/80 border-b screen-only">
-        <TOSReferencePanel
-          title={test.title}
-          course={test.course}
-          subject={test.subject}
-          examPeriod={test.exam_period}
-          schoolYear={test.school_year}
-          semester={test.semester}
-          totalItems={items.length}
-          items={items as any}
-        />
-      </div>
-
-
-
-      {/* Exam Paper */}
       <Card className="print:shadow-none print:border-none" id="test-content">
         <CardHeader className="text-center border-b print:border-black">
           <div className="space-y-2">
@@ -546,6 +682,8 @@ export default function GeneratedTestPage() {
                 items={groupedQuestions.mcq}
                 startNumber={mcqStart}
                 showAnswer={showAnswerKey}
+                editable={isEditable}
+                onEdit={openQuestionEditor}
               />
             )}
             
@@ -556,6 +694,8 @@ export default function GeneratedTestPage() {
                 items={groupedQuestions.secondary}
                 startNumber={secondaryStart}
                 showAnswer={showAnswerKey}
+                editable={isEditable}
+                onEdit={openQuestionEditor}
               />
             )}
             
@@ -568,6 +708,8 @@ export default function GeneratedTestPage() {
                 showAnswer={showAnswerKey}
                 isEssaySection
                 totalTestItems={items.length}
+                editable={isEditable}
+                onEdit={openQuestionEditor}
               />
             )}
           </div>
@@ -602,8 +744,152 @@ export default function GeneratedTestPage() {
           </CardContent>
         </Card>
       )}
+          </div>
+        </div>
+
+        {/* Per-question editor (draft stage only) */}
+        <Dialog open={!!questionDraft} onOpenChange={(open) => !open && setQuestionDraft(null)}>
+          <DialogContent className="sm:max-w-2xl max-h-[85vh] overflow-y-auto">
+            <DialogHeader>
+              <DialogTitle>Edit Question {questionDraft ? questionDraft.index + 1 : ""}</DialogTitle>
+            </DialogHeader>
+            {questionDraft && (
+              <div className="space-y-4">
+                <div className="space-y-2">
+                  <Label htmlFor="q-text">Question</Label>
+                  <Textarea
+                    id="q-text"
+                    rows={4}
+                    value={questionDraft.question_text}
+                    onChange={(e) => setQuestionDraft({ ...questionDraft, question_text: e.target.value })}
+                  />
+                </div>
+
+                {questionDraft.choices.length > 0 && (
+                  <div className="space-y-2">
+                    <Label>Answer Choices</Label>
+                    {questionDraft.choices.map((choice, i) => (
+                      <div key={choice.key} className="flex items-center gap-2">
+                        <span className="w-6 text-sm font-medium">{choice.key}.</span>
+                        <Input
+                          value={choice.text}
+                          onChange={(e) => {
+                            const next = [...questionDraft.choices];
+                            next[i] = { ...next[i], text: e.target.value };
+                            setQuestionDraft({ ...questionDraft, choices: next });
+                          }}
+                        />
+                      </div>
+                    ))}
+                  </div>
+                )}
+
+                <div className="space-y-2">
+                  <Label htmlFor="q-answer">Correct Answer</Label>
+                  {questionDraft.choices.length > 0 ? (
+                    <Select
+                      value={questionDraft.correct_answer}
+                      onValueChange={(v) => setQuestionDraft({ ...questionDraft, correct_answer: v })}
+                    >
+                      <SelectTrigger id="q-answer">
+                        <SelectValue placeholder="Select the correct option" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {questionDraft.choices.map((c) => (
+                          <SelectItem key={c.key} value={c.key}>
+                            {c.key}. {c.text}
+                          </SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  ) : questionDraft.question_type.includes("true") ? (
+                    <Select
+                      value={questionDraft.correct_answer}
+                      onValueChange={(v) => setQuestionDraft({ ...questionDraft, correct_answer: v })}
+                    >
+                      <SelectTrigger id="q-answer">
+                        <SelectValue placeholder="Select TRUE or FALSE" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        <SelectItem value="True">True</SelectItem>
+                        <SelectItem value="False">False</SelectItem>
+                      </SelectContent>
+                    </Select>
+                  ) : (
+                    <Textarea
+                      id="q-answer"
+                      rows={3}
+                      value={questionDraft.correct_answer}
+                      onChange={(e) => setQuestionDraft({ ...questionDraft, correct_answer: e.target.value })}
+                    />
+                  )}
+                </div>
+
+                <div className="grid grid-cols-2 gap-4">
+                  <div className="space-y-2">
+                    <Label htmlFor="q-topic">Topic</Label>
+                    <Input
+                      id="q-topic"
+                      value={questionDraft.topic}
+                      onChange={(e) => setQuestionDraft({ ...questionDraft, topic: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="q-points">Points</Label>
+                    <Input
+                      id="q-points"
+                      type="number"
+                      min={1}
+                      value={questionDraft.points}
+                      onChange={(e) => setQuestionDraft({ ...questionDraft, points: e.target.value })}
+                    />
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="q-bloom">Bloom's Level</Label>
+                    <Select
+                      value={questionDraft.bloom_level}
+                      onValueChange={(v) => setQuestionDraft({ ...questionDraft, bloom_level: v })}
+                    >
+                      <SelectTrigger id="q-bloom">
+                        <SelectValue placeholder="Select level" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {["Remembering", "Understanding", "Applying", "Analyzing", "Evaluating", "Creating"].map((b) => (
+                          <SelectItem key={b} value={b}>{b}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                  <div className="space-y-2">
+                    <Label htmlFor="q-difficulty">Difficulty</Label>
+                    <Select
+                      value={questionDraft.difficulty}
+                      onValueChange={(v) => setQuestionDraft({ ...questionDraft, difficulty: v })}
+                    >
+                      <SelectTrigger id="q-difficulty">
+                        <SelectValue placeholder="Select difficulty" />
+                      </SelectTrigger>
+                      <SelectContent>
+                        {["Easy", "Average", "Difficult"].map((d) => (
+                          <SelectItem key={d} value={d}>{d}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                  </div>
+                </div>
+              </div>
+            )}
+            <DialogFooter>
+              <Button variant="outline" onClick={() => setQuestionDraft(null)}>Cancel</Button>
+              <Button onClick={handleSaveQuestion} disabled={savingQuestion}>
+                {savingQuestion ? "Saving…" : "Save Question"}
+              </Button>
+            </DialogFooter>
+          </DialogContent>
+        </Dialog>
       </div>
     </>
+
   );
 }
 
@@ -635,7 +921,9 @@ function QuestionSection({
   startNumber, 
   showAnswer,
   isEssaySection = false,
-  totalTestItems = 0
+  totalTestItems = 0,
+  editable = false,
+  onEdit,
 }: { 
   title: string; 
   instruction: string; 
@@ -644,6 +932,8 @@ function QuestionSection({
   showAnswer: boolean;
   isEssaySection?: boolean;
   totalTestItems?: number;
+  editable?: boolean;
+  onEdit?: (item: TestItem, index: number) => void;
 }) {
   return (
     <div className="space-y-4">
@@ -663,6 +953,8 @@ function QuestionSection({
               displayNumber={displayNumber}
               number={startNumber + index}
               showAnswer={showAnswer}
+              editable={editable}
+              onEdit={onEdit}
             />
           );
         })}
@@ -720,7 +1012,7 @@ function formatAnswer(item: TestItem): string {
   return String(answer);
 }
 
-function QuestionItem({ item, number, displayNumber, showAnswer }: { item: TestItem; number: number; displayNumber?: string; showAnswer: boolean }) {
+function QuestionItem({ item, number, displayNumber, showAnswer, editable = false, onEdit }: { item: TestItem; number: number; displayNumber?: string; showAnswer: boolean; editable?: boolean; onEdit?: (item: TestItem, index: number) => void }) {
   const getDifficultyColor = (difficulty?: string) => {
     switch (difficulty?.toLowerCase()) {
       case "easy":
@@ -780,6 +1072,17 @@ function QuestionItem({ item, number, displayNumber, showAnswer }: { item: TestI
             <Badge variant="outline" className="text-xs">
               {item.points} {item.points === 1 ? "pt" : "pts"}
             </Badge>
+          )}
+          {editable && onEdit && typeof item.__idx === "number" && (
+            <Button
+              variant="outline"
+              size="sm"
+              className="gap-1.5"
+              onClick={() => onEdit(item, item.__idx as number)}
+            >
+              <Pencil className="w-3.5 h-3.5" />
+              Edit
+            </Button>
           )}
         </div>
       </div>

@@ -15,6 +15,8 @@ const Index = () => {
     
     if (role === 'admin') {
       navigate('/admin/dashboard');
+    } else if (role === 'validator') {
+      navigate('/validator/pending');
     } else if (role === 'teacher') {
       navigate('/teacher/dashboard');
     }

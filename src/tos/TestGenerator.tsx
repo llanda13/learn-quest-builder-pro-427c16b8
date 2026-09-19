@@ -286,12 +286,18 @@ export function TestGenerator({ tosData, onTestGenerated, onCancel }: TestGenera
           if (bloomLevel === 'hours' || bloomLevel === 'total' || !Array.isArray(itemNumbers)) return
           
           const difficulty = getDifficultyFromBloom(bloomLevel)
+          const questionType = ['remembering', 'understanding', 'applying'].includes(bloomLevel)
+            ? 'mcq'
+            : 'essay'
+
           tosCriteria.push({
             topic: topicName,
             bloom_level: bloomLevel.charAt(0).toUpperCase() + bloomLevel.slice(1),
             knowledge_dimension: 'conceptual',
             difficulty: difficulty.toLowerCase(),
-            count: itemNumbers.length
+            count: itemNumbers.length,
+            item_numbers: itemNumbers,
+            question_type: questionType
           })
         })
       })
@@ -305,7 +311,7 @@ export function TestGenerator({ tosData, onTestGenerated, onCancel }: TestGenera
           school_year: tosData.schoolYear,
           year_section: tosData.yearSection,
           course: tosData.course,
-          tos_id: null
+          tos_id: (tosData as any).id ?? null
         }
       )
       

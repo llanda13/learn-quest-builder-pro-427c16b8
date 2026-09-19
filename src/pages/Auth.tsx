@@ -25,6 +25,8 @@ export default function Auth() {
     
     if (role === 'admin') {
       navigate('/admin/dashboard', { replace: true });
+    } else if (role === 'validator') {
+      navigate('/validator/pending', { replace: true });
     } else if (role === 'teacher') {
       navigate('/teacher/dashboard', { replace: true });
     }

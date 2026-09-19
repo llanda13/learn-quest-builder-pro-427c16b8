@@ -18,6 +18,7 @@ import { useNavigate } from 'react-router-dom';
 import { useToast } from '@/hooks/use-toast';
 import { format } from 'date-fns';
 import { TOSViewDialog } from '@/components/tos/TOSViewDialog';
+import { clearPersistedState } from '@/hooks/usePersistentState';
 
 interface TOSEntry {
   id: string;
@@ -139,7 +140,10 @@ export default function TOSHistory() {
             View and reuse your saved Table of Specifications templates
           </p>
         </div>
-        <Button onClick={() => navigate('/teacher/tos')}>
+        <Button onClick={() => {
+          clearPersistedState("tos-builder-draft");
+          navigate('/teacher/tos');
+        }}>
           <FileText className="h-4 w-4 mr-2" />
           Create New TOS
         </Button>

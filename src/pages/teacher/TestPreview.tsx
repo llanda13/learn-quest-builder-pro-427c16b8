@@ -10,6 +10,8 @@ import { useToast } from '@/hooks/use-toast';
 import { useExamRenderModel } from '@/print/useExamRenderModel';
 import { printExam } from '@/print/printExam';
 import { exportExamPdf } from '@/print/exportExamPdf';
+import { TOSReferencePanel } from '@/components/TOSReferencePanel';
+
 
 
 interface TestItem {
@@ -201,25 +203,47 @@ export default function TestPreview() {
 
   return (
     <>
-      {/* Screen View */}
-      <div className="container mx-auto py-4 sm:py-8 px-4 space-y-6 screen-only">
-        {/* Header */}
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
-          <Button variant="outline" onClick={() => navigate('/teacher/my-tests')} size="sm" className="sm:size-default">
-            <ArrowLeft className="h-4 w-4 mr-2" />
-            Back to Tests
-          </Button>
-          <div className="flex gap-2 w-full sm:w-auto">
-            <Button onClick={handlePrint} className="flex-1 sm:flex-none">
-              <Printer className="h-4 w-4 mr-2" />
-              Print
-            </Button>
-            <Button variant="outline" onClick={handleExport} className="flex-1 sm:flex-none">
-              <Download className="h-4 w-4 mr-2" />
-              Export PDF
-            </Button>
+      {/* Screen View — split layout: fixed TOS on top, scrollable questionnaire below */}
+      <div className="flex flex-col h-screen screen-only">
+        {/* Fixed top: actions + TOS reference */}
+        <div className="shrink-0 border-b bg-background">
+          <div className="container mx-auto px-4 pt-4 pb-3 space-y-4">
+            <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-4">
+              <Button variant="outline" onClick={() => navigate('/teacher/my-tests')} size="sm" className="sm:size-default">
+                <ArrowLeft className="h-4 w-4 mr-2" />
+                Back to Tests
+              </Button>
+              <div className="flex gap-2 w-full sm:w-auto">
+                <Button onClick={handlePrint} className="flex-1 sm:flex-none">
+                  <Printer className="h-4 w-4 mr-2" />
+                  Print
+                </Button>
+                <Button variant="outline" onClick={handleExport} className="flex-1 sm:flex-none">
+                  <Download className="h-4 w-4 mr-2" />
+                  Export PDF
+                </Button>
+              </div>
+            </div>
+
+            {/* Fixed TOS reference — always visible while reviewing the questionnaire */}
+            <TOSReferencePanel
+              title={test.title}
+              course={test.course}
+              subject={test.subject}
+              examPeriod={test.exam_period}
+              schoolYear={test.school_year}
+              semester={test.semester}
+              totalItems={items.length}
+              items={items as any}
+              tosId={(test as any).tos_id}
+            />
           </div>
         </div>
+
+        {/* Independently scrollable questionnaire area */}
+        <div className="flex-1 overflow-y-auto">
+          <div className="container mx-auto px-4 py-6 space-y-6">
+
 
       {/* Test Header */}
       <Card>
@@ -387,8 +411,11 @@ export default function TestPreview() {
           </CardContent>
         </Card>
       )}
+          </div>
+        </div>
       </div>
     </>
+
   );
 }
 
