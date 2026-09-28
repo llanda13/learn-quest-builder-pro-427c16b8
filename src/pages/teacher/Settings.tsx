@@ -27,6 +27,7 @@ interface ProfileData {
   full_name: string;
   email: string;
   college: string;
+  course: string;
   avatar_url: string;
 }
 
