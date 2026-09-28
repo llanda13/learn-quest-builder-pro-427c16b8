@@ -14,7 +14,7 @@ export interface AuthContextType {
   session: Session | null;
   profile: Profile | null;
   loading: boolean;
-  signUp: (email: string, password: string, fullName: string, college?: string) => Promise<{ error: any }>;
+  signUp: (email: string, password: string, fullName: string, college?: string, course?: string) => Promise<{ error: any }>;
   signIn: (email: string, password: string) => Promise<{ error: any }>;
   signOut: () => Promise<void>;
   refreshProfile: () => Promise<void>;
@@ -121,7 +121,7 @@ export const useAuthState = () => {
   }, []);
 
 
-  const signUp = async (email: string, password: string, fullName: string, college?: string) => {
+  const signUp = async (email: string, password: string, fullName: string, college?: string, course?: string) => {
     const redirectUrl = `${window.location.origin}/`;
     
     const { error, data } = await supabase.auth.signUp({
@@ -131,16 +131,17 @@ export const useAuthState = () => {
         emailRedirectTo: redirectUrl,
         data: {
           full_name: fullName,
-          college: college || ''
+          college: college || '',
+          course: course || ''
         }
       }
     });
 
     // Update college in profile if provided
-    if (!error && data?.user && college) {
+    if (!error && data?.user && (college || course)) {
       await supabase
         .from('profiles')
-        .update({ college })
+        .update({ college: college || null, course: course || null } as any)
         .eq('id', data.user.id);
     }
 

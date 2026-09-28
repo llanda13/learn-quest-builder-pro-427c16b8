@@ -27,6 +27,7 @@ interface ProfileData {
   full_name: string;
   email: string;
   college: string;
+  course: string;
   avatar_url: string;
 }
 
@@ -86,7 +87,7 @@ export default function Settings() {
           full_name: profile.full_name,
           college: profile.college,
           updated_at: new Date().toISOString()
-        })
+        } as any)
         .eq('id', user.id);
 
       if (error) throw error;
@@ -297,6 +298,23 @@ export default function Settings() {
               <p className="text-xs text-muted-foreground">
                 This will appear on your TOS headers and printed test outputs
               </p>
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="course">Course</Label>
+              <Input
+                id="course"
+                placeholder="e.g., BSIT"
+                value={profile.course}
+                onChange={(e) => setProfile(prev => ({ ...prev, course: e.target.value }))}
+              />
+              {!profile.course.trim() ? (
+                <p className="text-xs text-destructive">
+                  Your Course is not assigned yet. Set it so your course-specific Chairperson and Dean can be filled in your TOS automatically.
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">Used with your College to find your Chairperson and Dean for the TOS</p>
+              )}
             </div>
 
             <Button 

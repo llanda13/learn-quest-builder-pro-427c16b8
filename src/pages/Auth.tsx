@@ -65,6 +65,7 @@ export default function Auth() {
     const password = formData.get('password') as string;
     const fullName = formData.get('fullName') as string;
     const college = formData.get('college') as string;
+    const course = formData.get('course') as string;
 
     if (password.length < 6) {
       setError('Password must be at least 6 characters long');
@@ -72,7 +73,7 @@ export default function Auth() {
       return;
     }
 
-    const { error } = await signUp(email, password, fullName, college);
+    const { error } = await signUp(email, password, fullName, college, course);
     
     if (error) {
       if (error.message.includes('already registered')) {
@@ -183,6 +184,10 @@ export default function Auth() {
                     placeholder="e.g. College of Education"
                     disabled={isLoading}
                   />
+                </div>
+                <div className="space-y-2">
+                  <Label htmlFor="course">Course</Label>
+                  <Input id="course" name="course" type="text" placeholder="e.g. BSIT" disabled={isLoading} />
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="signup-password">Password</Label>

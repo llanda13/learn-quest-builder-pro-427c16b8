@@ -452,6 +452,42 @@ export type Database = {
         }
         Relationships: []
       }
+      department_officers: {
+        Row: {
+          chairperson: string
+          course: string
+          created_at: string
+          dean: string
+          department: string
+          id: string
+          status: string
+          updated_at: string
+          updated_by: string | null
+        }
+        Insert: {
+          chairperson?: string
+          course: string
+          created_at?: string
+          dean?: string
+          department: string
+          id?: string
+          status?: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Update: {
+          chairperson?: string
+          course?: string
+          created_at?: string
+          dean?: string
+          department?: string
+          id?: string
+          status?: string
+          updated_at?: string
+          updated_by?: string | null
+        }
+        Relationships: []
+      }
       document_activity: {
         Row: {
           action_details: Json | null
@@ -832,6 +868,7 @@ export type Database = {
         Row: {
           avatar_url: string | null
           college: string | null
+          course: string | null
           created_at: string
           email: string
           full_name: string
@@ -842,6 +879,7 @@ export type Database = {
         Insert: {
           avatar_url?: string | null
           college?: string | null
+          course?: string | null
           created_at?: string
           email: string
           full_name?: string
@@ -852,6 +890,7 @@ export type Database = {
         Update: {
           avatar_url?: string | null
           college?: string | null
+          course?: string | null
           created_at?: string
           email?: string
           full_name?: string

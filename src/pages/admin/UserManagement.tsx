@@ -18,6 +18,7 @@ interface UserWithRole {
   email: string;
   full_name: string;
   college: string | null;
+  course: string | null;
   created_at: string;
   role: 'admin' | 'teacher' | 'validator' | null;
   roles: Array<'admin' | 'teacher' | 'validator'>;
@@ -27,12 +28,13 @@ interface UserFormData {
   email: string;
   full_name: string;
   college: string;
+  course: string;
   role: string;
   password: string;
   evaluator: boolean;
 }
 
-const emptyForm: UserFormData = { email: '', full_name: '', college: '', role: 'teacher', password: '', evaluator: false };
+const emptyForm: UserFormData = { email: '', full_name: '', college: '', course: '', role: 'teacher', password: '', evaluator: false };
 
 export default function UserManagement() {
   const [users, setUsers] = useState<UserWithRole[]>([]);
@@ -53,7 +55,7 @@ export default function UserManagement() {
       setLoading(true);
       const { data: profiles, error: profilesError } = await supabase
         .from('profiles')
-        .select('id, email, full_name, college, created_at')
+        .select('*')
         .order('created_at', { ascending: false });
       if (profilesError) throw profilesError;
 
@@ -74,6 +76,7 @@ export default function UserManagement() {
         email: p.email,
         full_name: p.full_name || '',
         college: p.college || null,
+        course: (p as any).course || null,
         created_at: p.created_at,
         roles: roleMap.get(p.id) || [],
         role: (['admin', 'teacher', 'validator'] as const).find((candidate) => roleMap.get(p.id)?.includes(candidate)) || null,
@@ -92,6 +95,7 @@ export default function UserManagement() {
       email: user.email,
       full_name: user.full_name,
       college: user.college || '',
+      course: user.course || '',
       role: user.role || 'teacher',
       password: '',
       evaluator: user.roles.includes('validator'),
@@ -106,7 +110,7 @@ export default function UserManagement() {
       // Update profile
       const { error: profileError } = await supabase
         .from('profiles')
-        .update({ full_name: editForm.full_name, college: editForm.college })
+        .update({ full_name: editForm.full_name, college: editForm.college, course: editForm.course.trim() || null } as any)
         .eq('id', editUser.id);
       if (profileError) throw profileError;
 
@@ -208,6 +212,7 @@ export default function UserManagement() {
           email: addForm.email,
           full_name: addForm.full_name,
           college: addForm.college,
+          course: addForm.course,
           password: addForm.password,
           role: addForm.role,
         },
@@ -278,6 +283,7 @@ export default function UserManagement() {
                   <TableHead>Email</TableHead>
                   <TableHead>Name</TableHead>
                   <TableHead>College</TableHead>
+                  <TableHead>Course</TableHead>
                   <TableHead>Role</TableHead>
                   <TableHead>Actions</TableHead>
                 </TableRow>
@@ -288,6 +294,7 @@ export default function UserManagement() {
                     <TableCell className="font-medium">{user.email}</TableCell>
                     <TableCell>{user.full_name || '—'}</TableCell>
                     <TableCell>{user.college || '—'}</TableCell>
+                    <TableCell>{user.course || <span className="text-destructive text-xs">Not assigned</span>}</TableCell>
                     <TableCell>
                       <div className="flex flex-wrap gap-1">
                         {(user.roles.length ? user.roles : ['No Role']).map((role) => (
@@ -335,6 +342,10 @@ export default function UserManagement() {
             <div>
               <Label>College</Label>
               <Input value={editForm.college} onChange={e => setEditForm(f => ({ ...f, college: e.target.value }))} placeholder="e.g. College of Engineering" />
+            </div>
+            <div className="space-y-2">
+              <Label>Course</Label>
+              <Input value={editForm.course} onChange={e => setEditForm(f => ({ ...f, course: e.target.value }))} placeholder="e.g. BSIT" />
             </div>
             <div>
               <Label>Role</Label>
@@ -388,6 +399,10 @@ export default function UserManagement() {
             <div>
               <Label>College</Label>
               <Input value={addForm.college} onChange={e => setAddForm(f => ({ ...f, college: e.target.value }))} placeholder="e.g. College of Education" />
+            </div>
+            <div className="space-y-2">
+              <Label>Course</Label>
+              <Input value={addForm.course} onChange={e => setAddForm(f => ({ ...f, course: e.target.value }))} placeholder="e.g. BSIT" />
             </div>
             <div>
               <Label>Role</Label>

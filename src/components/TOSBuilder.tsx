@@ -10,6 +10,7 @@ import { Separator } from "@/components/ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Plus, Trash2, Calculator, Brain, Target, AlertTriangle, Upload, RotateCcw } from "lucide-react";
 import { TOSUploadParser } from "./tos/TOSUploadParser";
+import { resolveOfficers } from "@/services/db/departmentOfficers";
 import {
   AlertDialog,
   AlertDialogAction,
@@ -306,17 +307,14 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
     (async () => {
       try {
         const [profileRes, settingsRes] = await Promise.all([
-          supabase.from('profiles').select('full_name, college').eq('id', user.id).maybeSingle(),
-          supabase.from('system_settings').select('key, value').in('key', ['active_school_year', 'dept_officers']),
+          supabase.from('profiles').select('*').eq('id', user.id).maybeSingle(),
+          supabase.from('system_settings').select('key, value').in('key', ['active_school_year']),
         ]);
 
         const fullName = (profileRes.data as any)?.full_name as string | undefined;
-        const department = (profileRes.data as any)?.college as string | undefined;
         const settingMap = new Map<string, any>((settingsRes.data ?? []).map((r: any) => [r.key, r.value]));
         const activeSY = settingMap.get('active_school_year');
-        const officers = (settingMap.get('dept_officers') ?? {}) as Record<string, { chairperson?: string; dean?: string; status?: string }>;
-        const rawDept = department ? officers[department] : undefined;
-        const deptOfficers = rawDept && (rawDept.status ?? 'active') !== 'inactive' ? rawDept : undefined;
+        const res = await resolveOfficers((profileRes.data as any)?.college, (profileRes.data as any)?.course);
 
         const apply = (field: keyof TOSFormData, value: string | undefined) => {
           if (!value) return;
@@ -328,8 +326,12 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
 
         apply('prepared_by', fullName);
         apply('school_year', typeof activeSY === 'string' ? activeSY : undefined);
-        apply('checked_by', deptOfficers?.chairperson);
-        apply('noted_by', deptOfficers?.dean);
+        if (res.ok) {
+          apply('checked_by', res.chairperson);
+          apply('noted_by', res.dean);
+        } else {
+          toast.warning((res as any).message, { duration: 8000 });
+        }
       } catch (err) {
         console.warn('TOS auto-fill from profile/settings failed:', err);
       }
@@ -468,20 +470,23 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
     if (user?.id) {
       try {
         const [profileRes, settingsRes] = await Promise.all([
-          supabase.from('profiles').select('full_name, college').eq('id', user.id).maybeSingle(),
-          supabase.from('system_settings').select('key, value').in('key', ['active_school_year', 'dept_officers']),
+          supabase.from('profiles').select('*').eq('id', user.id).maybeSingle(),
+          supabase.from('system_settings').select('key, value').in('key', ['active_school_year']),
         ]);
         const fullName = (profileRes.data as any)?.full_name as string | undefined;
-        const department = (profileRes.data as any)?.college as string | undefined;
         const settingMap = new Map<string, any>((settingsRes.data ?? []).map((r: any) => [r.key, r.value]));
         const activeSY = settingMap.get('active_school_year');
-        const officers = (settingMap.get('dept_officers') ?? {}) as Record<string, { chairperson?: string; dean?: string; status?: string }>;
-        const rawDept = department ? officers[department] : undefined;
-        const deptOfficers = rawDept && (rawDept.status ?? 'active') !== 'inactive' ? rawDept : undefined;
+        const res = await resolveOfficers((profileRes.data as any)?.college, (profileRes.data as any)?.course);
         if (fullName) setValue('prepared_by', fullName);
         if (typeof activeSY === 'string') setValue('school_year', activeSY);
-        if (deptOfficers?.chairperson) setValue('checked_by', deptOfficers.chairperson);
-        if (deptOfficers?.dean) setValue('noted_by', deptOfficers.dean);
+        if (res.ok) {
+          setValue('checked_by', res.chairperson);
+          setValue('noted_by', res.dean);
+        } else {
+          setValue('checked_by', '');
+          setValue('noted_by', '');
+          toast.warning((res as any).message, { duration: 8000 });
+        }
       } catch { /* non-fatal */ }
     }
     toast.success('Form cleared. Ready for a new TOS.');

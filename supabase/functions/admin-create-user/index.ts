@@ -38,6 +38,7 @@ Deno.serve(async (req) => {
     const email = String(body.email ?? "").trim().toLowerCase();
     const fullName = String(body.full_name ?? "").trim();
     const college = String(body.college ?? "").trim();
+    const course = String(body.course ?? "").trim();
     const password = String(body.password ?? "").trim();
     const roles: AppRole[] = Array.isArray(body.roles) ? body.roles : [body.role];
     const desiredRoles = [...new Set(roles.filter((r): r is AppRole => VALID_ROLES.includes(r)))];
@@ -61,7 +62,7 @@ Deno.serve(async (req) => {
     // 2) Profile (the signup trigger creates it; ensure name/college are correct).
     const { error: profileError } = await service
       .from("profiles")
-      .upsert({ id: userId, email, full_name: fullName, college: college || null }, { onConflict: "id" });
+      .upsert({ id: userId, email, full_name: fullName, college: college || null, course: course || null }, { onConflict: "id" });
     if (profileError) {
       await service.auth.admin.deleteUser(userId);
       return json({ error: `Account rolled back — profile could not be saved: ${profileError.message}` }, 500);
