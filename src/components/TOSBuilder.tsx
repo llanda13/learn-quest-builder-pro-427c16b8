@@ -10,6 +10,7 @@ import { Separator } from "@/components/ui/separator";
 import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@/components/ui/select";
 import { Plus, Trash2, Calculator, Brain, Target, AlertTriangle, Upload, RotateCcw } from "lucide-react";
 import { TOSUploadParser } from "./tos/TOSUploadParser";
+import { resolveOfficers } from "@/services/db/departmentOfficers";
 import {
   AlertDialog,
   AlertDialogAction,
