@@ -299,6 +299,23 @@ export default function Settings() {
               </p>
             </div>
 
+            <div className="space-y-2">
+              <Label htmlFor="course">Course</Label>
+              <Input
+                id="course"
+                placeholder="e.g., BSIT"
+                value={profile.course}
+                onChange={(e) => setProfile(prev => ({ ...prev, course: e.target.value }))}
+              />
+              {!profile.course.trim() ? (
+                <p className="text-xs text-destructive">
+                  Your Course is not assigned yet. Set it so your course-specific Chairperson and Dean can be filled in your TOS automatically.
+                </p>
+              ) : (
+                <p className="text-xs text-muted-foreground">Used with your College to find your Chairperson and Dean for the TOS</p>
+              )}
+            </div>
+
             <Button 
               onClick={handleSaveProfile} 
               disabled={saving}
