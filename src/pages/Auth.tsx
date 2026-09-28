@@ -65,6 +65,7 @@ export default function Auth() {
     const password = formData.get('password') as string;
     const fullName = formData.get('fullName') as string;
     const college = formData.get('college') as string;
+    const course = formData.get('course') as string;
 
     if (password.length < 6) {
       setError('Password must be at least 6 characters long');
@@ -72,7 +73,7 @@ export default function Auth() {
       return;
     }
 
-    const { error } = await signUp(email, password, fullName, college);
+    const { error } = await signUp(email, password, fullName, college, course);
     
     if (error) {
       if (error.message.includes('already registered')) {

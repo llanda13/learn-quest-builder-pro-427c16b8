@@ -283,6 +283,7 @@ export default function UserManagement() {
                   <TableHead>Email</TableHead>
                   <TableHead>Name</TableHead>
                   <TableHead>College</TableHead>
+                  <TableHead>Course</TableHead>
                   <TableHead>Role</TableHead>
                   <TableHead>Actions</TableHead>
                 </TableRow>
