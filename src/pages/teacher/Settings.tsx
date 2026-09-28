@@ -86,7 +86,7 @@ export default function Settings() {
           full_name: profile.full_name,
           college: profile.college,
           updated_at: new Date().toISOString()
-        })
+        } as any)
         .eq('id', user.id);
 
       if (error) throw error;
