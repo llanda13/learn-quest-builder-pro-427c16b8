@@ -186,6 +186,10 @@ export default function Auth() {
                   />
                 </div>
                 <div className="space-y-2">
+                  <Label htmlFor="course">Course</Label>
+                  <Input id="course" name="course" type="text" placeholder="e.g. BSIT" disabled={isLoading} />
+                </div>
+                <div className="space-y-2">
                   <Label htmlFor="signup-password">Password</Label>
                   <Input
                     id="signup-password"
