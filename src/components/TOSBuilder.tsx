@@ -330,7 +330,7 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
           apply('checked_by', res.chairperson);
           apply('noted_by', res.dean);
         } else {
-          toast.warning(res.message, { duration: 8000 });
+          toast.warning((res as any).message, { duration: 8000 });
         }
       } catch (err) {
         console.warn('TOS auto-fill from profile/settings failed:', err);
@@ -485,7 +485,7 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
         } else {
           setValue('checked_by', '');
           setValue('noted_by', '');
-          toast.warning(res.message, { duration: 8000 });
+          toast.warning((res as any).message, { duration: 8000 });
         }
       } catch { /* non-fatal */ }
     }
