@@ -43,6 +43,7 @@ export default function Settings() {
     full_name: '',
     email: '',
     college: '',
+    course: '',
     avatar_url: ''
   });
 
@@ -57,7 +58,7 @@ export default function Settings() {
       setLoading(true);
       const { data, error } = await supabase
         .from('profiles')
-        .select('full_name, email, college, avatar_url')
+        .select('*')
         .eq('id', user?.id)
         .single();
 
@@ -67,6 +68,7 @@ export default function Settings() {
         full_name: data?.full_name || '',
         email: data?.email || user?.email || '',
         college: data?.college || '',
+        course: (data as any)?.course || '',
         avatar_url: data?.avatar_url || ''
       });
     } catch (error) {
@@ -86,6 +88,7 @@ export default function Settings() {
         .update({
           full_name: profile.full_name,
           college: profile.college,
+          course: profile.course.trim() || null,
           updated_at: new Date().toISOString()
         } as any)
         .eq('id', user.id);
@@ -163,7 +166,7 @@ export default function Settings() {
         .update({ 
           avatar_url: avatarUrl,
           updated_at: new Date().toISOString()
-        })
+        } as any)
         .eq('id', user.id);
 
       if (updateError) throw updateError;
