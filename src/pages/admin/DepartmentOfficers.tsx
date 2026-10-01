@@ -180,8 +180,12 @@ export default function DepartmentOfficers() {
                 return (
                   <div key={row.id} className="border rounded-lg p-4 bg-card">
                     <div className="grid grid-cols-1 md:grid-cols-12 gap-3 items-center">
-                      {field('department', 'Department', true)}
-                      {field('course', 'Course', true)}
+                      {isEditing ? editSelects : (
+                        <>
+                          {field('department', 'Department', true)}
+                          {field('course', 'Course', true)}
+                        </>
+                      )}
                       {field('chairperson', 'Chairperson')}
                       {field('dean', 'Dean')}
                       <div className="md:col-span-2 flex flex-col items-start gap-1">
