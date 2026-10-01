@@ -179,17 +179,44 @@ export default function Auth() {
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="college">College</Label>
-                  <Input
-                    id="college"
-                    name="college"
-                    type="text"
-                    placeholder="e.g. College of Education"
+                  <Select
+                    value={college}
+                    onValueChange={(value) => {
+                      setCollege(value);
+                      setCourse('');
+                    }}
                     disabled={isLoading}
-                  />
+                  >
+                    <SelectTrigger id="college">
+                      <SelectValue placeholder="Select your college" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {COLLEGES_AND_COURSES.map((c) => (
+                        <SelectItem key={c.college} value={c.college}>
+                          {c.college}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="course">Course</Label>
-                  <Input id="course" name="course" type="text" placeholder="e.g. BSIT" disabled={isLoading} />
+                  <Select
+                    value={course}
+                    onValueChange={setCourse}
+                    disabled={isLoading || !college}
+                  >
+                    <SelectTrigger id="course">
+                      <SelectValue placeholder={college ? 'Select your course' : 'Select a college first'} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {getCoursesForCollege(college).map((courseName) => (
+                        <SelectItem key={courseName} value={courseName}>
+                          {courseName}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="signup-password">Password</Label>
