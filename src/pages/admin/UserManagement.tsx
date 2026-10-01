@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { useToast } from '@/hooks/use-toast';
 import { Users, RefreshCw, Plus, Pencil, Trash2 } from 'lucide-react';
+import { CollegeCourseSelects } from '@/components/CollegeCourseSelects';
 
 interface UserWithRole {
   id: string;

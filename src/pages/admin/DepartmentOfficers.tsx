@@ -15,6 +15,7 @@ import { useAuth } from '@/lib/auth';
 import { toast } from 'sonner';
 import { Building2, Plus, Trash2, Pencil, Save, X } from 'lucide-react';
 import type { DepartmentOfficer } from '@/services/db/departmentOfficers';
+import { CollegeCourseSelects } from '@/components/CollegeCourseSelects';
 
 const db = supabase as any;
 const norm = (s: string) => s.trim().toLowerCase();
