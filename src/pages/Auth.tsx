@@ -10,10 +10,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Loader2, GraduationCap } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { COLLEGES_AND_COURSES, getCoursesForCollege } from '@/constants/colleges';
 
 export default function Auth() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  const [college, setCollege] = useState('');
+  const [course, setCourse] = useState('');
   const { signIn, signUp } = useAuth();
   const { role, loading } = useUserRole();
   const navigate = useNavigate();
@@ -64,8 +68,6 @@ export default function Auth() {
     const email = formData.get('email') as string;
     const password = formData.get('password') as string;
     const fullName = formData.get('fullName') as string;
-    const college = formData.get('college') as string;
-    const course = formData.get('course') as string;
 
     if (password.length < 6) {
       setError('Password must be at least 6 characters long');
@@ -177,17 +179,44 @@ export default function Auth() {
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="college">College</Label>
-                  <Input
-                    id="college"
-                    name="college"
-                    type="text"
-                    placeholder="e.g. College of Education"
+                  <Select
+                    value={college}
+                    onValueChange={(value) => {
+                      setCollege(value);
+                      setCourse('');
+                    }}
                     disabled={isLoading}
-                  />
+                  >
+                    <SelectTrigger id="college">
+                      <SelectValue placeholder="Select your college" />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {COLLEGES_AND_COURSES.map((c) => (
+                        <SelectItem key={c.college} value={c.college}>
+                          {c.college}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="course">Course</Label>
-                  <Input id="course" name="course" type="text" placeholder="e.g. BSIT" disabled={isLoading} />
+                  <Select
+                    value={course}
+                    onValueChange={setCourse}
+                    disabled={isLoading || !college}
+                  >
+                    <SelectTrigger id="course">
+                      <SelectValue placeholder={college ? 'Select your course' : 'Select a college first'} />
+                    </SelectTrigger>
+                    <SelectContent>
+                      {getCoursesForCollege(college).map((courseName) => (
+                        <SelectItem key={courseName} value={courseName}>
+                          {courseName}
+                        </SelectItem>
+                      ))}
+                    </SelectContent>
+                  </Select>
                 </div>
                 <div className="space-y-2">
                   <Label htmlFor="signup-password">Password</Label>
