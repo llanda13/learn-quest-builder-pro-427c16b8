@@ -68,8 +68,6 @@ export default function Auth() {
     const email = formData.get('email') as string;
     const password = formData.get('password') as string;
     const fullName = formData.get('fullName') as string;
-    const college = formData.get('college') as string;
-    const course = formData.get('course') as string;
 
     if (password.length < 6) {
       setError('Password must be at least 6 characters long');
