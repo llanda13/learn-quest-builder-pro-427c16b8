@@ -10,10 +10,14 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Alert, AlertDescription } from '@/components/ui/alert';
 import { Loader2, GraduationCap } from 'lucide-react';
 import { useToast } from '@/hooks/use-toast';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
+import { COLLEGES_AND_COURSES, getCoursesForCollege } from '@/constants/colleges';
 
 export default function Auth() {
   const [isLoading, setIsLoading] = useState(false);
   const [error, setError] = useState('');
+  const [college, setCollege] = useState('');
+  const [course, setCourse] = useState('');
   const { signIn, signUp } = useAuth();
   const { role, loading } = useUserRole();
   const navigate = useNavigate();
