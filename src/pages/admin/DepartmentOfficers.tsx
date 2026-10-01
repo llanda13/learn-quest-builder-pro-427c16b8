@@ -123,8 +123,16 @@ export default function DepartmentOfficers() {
           </CardDescription>
         </CardHeader>
         <CardContent className="grid grid-cols-1 md:grid-cols-5 gap-3 items-end">
-          <div><Label>Department</Label><Input value={newDept} onChange={(e) => setNewDept(e.target.value)} placeholder="e.g., College of Computing…" /></div>
-          <div><Label>Course *</Label><Input value={newCourse} onChange={(e) => setNewCourse(e.target.value)} placeholder="e.g., BSIT" /></div>
+          <CollegeCourseSelects
+            college={newDept}
+            course={newCourse}
+            onCollegeChange={setNewDept}
+            onCourseChange={setNewCourse}
+            collegeLabel="Department"
+            courseLabel="Course"
+            required
+            disabled={saving}
+          />
           <div><Label>Chairperson</Label><Input value={newChair} onChange={(e) => setNewChair(e.target.value)} placeholder="Full name" /></div>
           <div><Label>Dean</Label><Input value={newDean} onChange={(e) => setNewDean(e.target.value)} placeholder="Full name" /></div>
           <Button onClick={addRow} disabled={saving}><Plus className="w-4 h-4 mr-1" /> Add</Button>
@@ -154,6 +162,19 @@ export default function DepartmentOfficers() {
                     ) : (
                       <div className={bold ? 'font-semibold' : 'text-sm'}>{row[key] || <span className="text-muted-foreground">—</span>}</div>
                     )}
+                  </div>
+                );
+                const editSelects = isEditing && (
+                  <div className="md:col-span-4 grid grid-cols-1 sm:grid-cols-2 gap-3">
+                    <CollegeCourseSelects
+                      college={d.department}
+                      course={d.course}
+                      onCollegeChange={(v) => setDraft({ ...d, department: v })}
+                      onCourseChange={(v) => setDraft({ ...d, course: v })}
+                      collegeLabel="Department"
+                      courseLabel="Course"
+                      disabled={saving}
+                    />
                   </div>
                 );
                 return (
