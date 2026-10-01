@@ -12,6 +12,7 @@ import { Dialog, DialogContent, DialogDescription, DialogFooter, DialogHeader, D
 import { AlertDialog, AlertDialogAction, AlertDialogCancel, AlertDialogContent, AlertDialogDescription, AlertDialogFooter, AlertDialogHeader, AlertDialogTitle } from '@/components/ui/alert-dialog';
 import { useToast } from '@/hooks/use-toast';
 import { Users, RefreshCw, Plus, Pencil, Trash2 } from 'lucide-react';
+import { CollegeCourseSelects } from '@/components/CollegeCourseSelects';
 
 interface UserWithRole {
   id: string;
@@ -339,14 +340,13 @@ export default function UserManagement() {
               <Label>Full Name</Label>
               <Input value={editForm.full_name} onChange={e => setEditForm(f => ({ ...f, full_name: e.target.value }))} />
             </div>
-            <div>
-              <Label>College</Label>
-              <Input value={editForm.college} onChange={e => setEditForm(f => ({ ...f, college: e.target.value }))} placeholder="e.g. College of Engineering" />
-            </div>
-            <div className="space-y-2">
-              <Label>Course</Label>
-              <Input value={editForm.course} onChange={e => setEditForm(f => ({ ...f, course: e.target.value }))} placeholder="e.g. BSIT" />
-            </div>
+            <CollegeCourseSelects
+              college={editForm.college}
+              course={editForm.course}
+              onCollegeChange={(v) => setEditForm(f => ({ ...f, college: v }))}
+              onCourseChange={(v) => setEditForm(f => ({ ...f, course: v }))}
+              disabled={saving}
+            />
             <div>
               <Label>Role</Label>
               <Select
@@ -396,14 +396,13 @@ export default function UserManagement() {
               <Label>Full Name <span className="text-destructive">*</span></Label>
               <Input value={addForm.full_name} onChange={e => setAddForm(f => ({ ...f, full_name: e.target.value }))} placeholder="Juan Dela Cruz" />
             </div>
-            <div>
-              <Label>College</Label>
-              <Input value={addForm.college} onChange={e => setAddForm(f => ({ ...f, college: e.target.value }))} placeholder="e.g. College of Education" />
-            </div>
-            <div className="space-y-2">
-              <Label>Course</Label>
-              <Input value={addForm.course} onChange={e => setAddForm(f => ({ ...f, course: e.target.value }))} placeholder="e.g. BSIT" />
-            </div>
+            <CollegeCourseSelects
+              college={addForm.college}
+              course={addForm.course}
+              onCollegeChange={(v) => setAddForm(f => ({ ...f, college: v }))}
+              onCourseChange={(v) => setAddForm(f => ({ ...f, course: v }))}
+              disabled={saving}
+            />
             <div>
               <Label>Role</Label>
               <Select value={addForm.role} onValueChange={v => setAddForm(f => ({ ...f, role: v }))}>
