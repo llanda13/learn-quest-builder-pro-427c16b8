@@ -2834,8 +2834,9 @@ serve(async (req) => {
 
     // Verify we have exactly the required count
     if (trimmedQuestions.length !== requiredTotal || trimmedQuestions.some(q => !q)) {
+      const filledCount = trimmedQuestions.filter(Boolean).length;
       throw new Error(
-        `Final validation failed: expected ${requiredTotal} questions, got ${trimmedQuestions.filter(Boolean).length}`
+        `Final validation failed: ${requiredTotal - filledCount} of ${requiredTotal} slots unfilled (filled ${filledCount}). Test was not saved.`
       );
     }
 
