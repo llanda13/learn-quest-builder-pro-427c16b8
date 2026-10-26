@@ -1403,69 +1403,6 @@ function createFallbackQuestion(slot: Slot, reason: string, sequence: number): a
 /**
  * Validate question structure based on type
  */
-function validateQuestion(question: any, questionType: string): boolean {
-  if (!question.question_text || question.question_text.length < 10) {
-    return false;
-  }
-
-  if (questionType === 'mcq') {
-    // RELAXED: accept if choices object exists with at least 2 options; downstream phase
-    // will backfill missing options and flag for review. This prevents over-rejection
-    // from blocking TOS completion.
-    let choices = question.choices;
-    if (!choices || typeof choices !== 'object') {
-      if (Array.isArray((question as any).options) && (question as any).options.length >= 2) {
-        choices = {};
-        ['A', 'B', 'C', 'D'].forEach((k, i) => {
-          if ((question as any).options[i]) choices[k] = String((question as any).options[i]);
-        });
-        question.choices = choices;
-      } else {
-        console.warn('MCQ missing choices object');
-        return false;
-      }
-    }
-    const optionCount = ['A', 'B', 'C', 'D'].filter(
-      key => choices[key] && typeof choices[key] === 'string' && choices[key].trim().length > 0
-    ).length;
-    if (optionCount < 2) {
-      console.warn('MCQ has fewer than 2 options');
-      return false;
-    }
-    // Invalid answer keys are unrecoverable at validation time; never default
-    // to A because that reintroduces structural answer-key bias.
-    if (!['A', 'B', 'C', 'D'].includes(question.correct_answer)) {
-      console.warn(`MCQ has invalid correct_answer: ${question.correct_answer}`);
-      return false;
-    }
-  }
-
-  if (questionType === 'true_false') {
-    // ENFORCE: correct_answer must be "True" or "False"
-    if (!['True', 'False', 'true', 'false'].includes(String(question.correct_answer))) {
-      console.warn(`T/F has invalid correct_answer: ${question.correct_answer}`);
-      return false;
-    }
-  }
-
-  if (questionType === 'short_answer') {
-    // ENFORCE: Must have a correct_answer or model answer
-    if (!question.correct_answer && !question.answer) {
-      console.warn('Short answer missing correct_answer');
-      return false;
-    }
-  }
-
-  if (questionType === 'essay') {
-    // Essay should have rubric or model answer
-    if (!question.answer && !question.rubric) {
-      console.warn('Essay missing model answer or rubric');
-      // Don't reject, just warn - essays are harder to generate
-    }
-  }
-
-  return true;
-}
 
 function selectNextConcept(registry: GenerationRegistry, topic: string): string {
   const used = registry.usedConcepts[topic] || [];
@@ -2897,8 +2834,9 @@ serve(async (req) => {
 
     // Verify we have exactly the required count
     if (trimmedQuestions.length !== requiredTotal || trimmedQuestions.some(q => !q)) {
+      const filledCount = trimmedQuestions.filter(Boolean).length;
       throw new Error(
-        `Final validation failed: expected ${requiredTotal} questions, got ${trimmedQuestions.filter(Boolean).length}`
+        `Final validation failed: ${requiredTotal - filledCount} of ${requiredTotal} slots unfilled (filled ${filledCount}). Test was not saved.`
       );
     }
 
