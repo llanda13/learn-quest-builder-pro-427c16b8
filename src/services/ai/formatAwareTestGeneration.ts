@@ -65,6 +65,145 @@ function normalizeQuestionType(type?: string): QuestionType {
   return 'essay';
 }
 
+function requiresChoices(questionType?: string): boolean {
+  return normalizeQuestionType(questionType) === 'mcq';
+}
+
+function hasUsableChoices(question: any): boolean {
+  const choices = question?.choices ?? question?.options;
+  if (!choices) return false;
+  if (Array.isArray(choices)) {
+    return choices.filter((c: any) => String(c ?? '').trim().length > 0).length >= 2;
+  }
+  if (typeof choices === 'object') {
+    return Object.values(choices).filter((c: any) => String(c ?? '').trim().length > 0).length >= 2;
+  }
+  return false;
+}
+
+export function normalizeQuestionText(text: string): string {
+  return String(text || '')
+    .toLowerCase()
+    .replace(/[^a-z0-9\s]/g, ' ')
+    .replace(/\s+/g, ' ')
+    .trim();
+}
+
+/**
+ * Resolve the correct answer as TEXT so that reordered answer choices do not
+ * change a question's identity (a choice letter is meaningless on its own).
+ */
+function resolveCorrectAnswerText(question: any): string {
+  const answer = String(question?.correct_answer ?? '').trim();
+  const choices = question?.choices;
+  if (choices && typeof choices === 'object' && !Array.isArray(choices)) {
+    const keyed = (choices as Record<string, string>)[answer.toUpperCase()];
+    if (keyed != null) return normalizeQuestionText(keyed);
+  }
+  if (Array.isArray(choices)) {
+    const index = answer.toUpperCase().charCodeAt(0) - 65;
+    if (answer.length === 1 && index >= 0 && index < choices.length) {
+      return normalizeQuestionText(String(choices[index]));
+    }
+  }
+  return normalizeQuestionText(answer);
+}
+
+export interface AcceptedQuestionRecord {
+  text: string;
+  normalizedText: string;
+  concept: string;
+  normalizedAnswer: string;
+  topic: string;
+}
+
+/**
+ * Exam-wide duplicate tracker (BUG 1 FIX).
+ * Compares every candidate against ALL previously accepted questions in the
+ * entire exam — across topics, batches, and sources — using:
+ *  1. normalized stem equality (capitalization, punctuation, whitespace),
+ *  2. semantic stem similarity (existing 0.7 threshold),
+ *  3. concept + expected-answer equality (reordered choices don't matter),
+ *  4. structural fingerprint (topic + concept + answer type).
+ */
+export class ExamDeduplicationTracker {
+  private accepted: AcceptedQuestionRecord[] = [];
+  private normalizedTexts = new Set<string>();
+  private fingerprintStore = new QuestionUniquenessStore();
+
+  private buildFingerprint(question: any, text: string) {
+    const bloomLevel = question?.bloom_level || 'Understanding';
+    return createQuestionFingerprint(
+      text,
+      question?.topic || '',
+      mapBloomToAnswerType(bloomLevel) as AnswerType,
+      bloomLevel,
+      (question?.knowledge_dimension || 'conceptual') as KnowledgeDimension
+    );
+  }
+
+  check(question: any): { duplicate: boolean; reason?: string } {
+    const text = String(question?.question_text || question?.text || '');
+    const normalizedText = normalizeQuestionText(text);
+    if (!normalizedText) {
+      return { duplicate: true, reason: 'empty question stem' };
+    }
+    if (this.normalizedTexts.has(normalizedText)) {
+      return {
+        duplicate: true,
+        reason: 'identical stem already accepted (ignoring capitalization, punctuation, and whitespace)'
+      };
+    }
+    if (this.accepted.length > 0 && isDuplicateByText(text, this.accepted.map((a) => a.text))) {
+      return { duplicate: true, reason: 'semantically similar stem already accepted in this exam' };
+    }
+    const concept = extractConcept(text);
+    const normalizedAnswer = resolveCorrectAnswerText(question);
+    if (concept && normalizedAnswer) {
+      for (const prior of this.accepted) {
+        if (prior.concept === concept && prior.normalizedAnswer === normalizedAnswer) {
+          return {
+            duplicate: true,
+            reason: `same concept and expected answer as an accepted question ("${concept}")`
+          };
+        }
+      }
+    }
+    const uniqueness = this.fingerprintStore.checkWithSuggestions(this.buildFingerprint(question, text));
+    if (!uniqueness.unique) {
+      return { duplicate: true, reason: uniqueness.reason };
+    }
+    return { duplicate: false };
+  }
+
+  register(question: any): void {
+    const text = String(question?.question_text || question?.text || '');
+    const normalizedText = normalizeQuestionText(text);
+    if (!normalizedText || this.normalizedTexts.has(normalizedText)) return;
+    this.accepted.push({
+      text,
+      normalizedText,
+      concept: extractConcept(text),
+      normalizedAnswer: resolveCorrectAnswerText(question),
+      topic: String(question?.topic || '').toLowerCase().trim()
+    });
+    this.normalizedTexts.add(normalizedText);
+    this.fingerprintStore.register(this.buildFingerprint(question, text));
+  }
+
+  getAcceptedStems(): string[] {
+    return this.accepted.map((a) => a.text);
+  }
+
+  get acceptedCount(): number {
+    return this.accepted.length;
+  }
+}
+
+export function createExamDeduplicationTracker(): ExamDeduplicationTracker {
+  return new ExamDeduplicationTracker();
+}
+
 function mapQuestionTypeToDbQuestionTypes(type?: string): string[] {
   const normalized = normalizeQuestionType(type);
   switch (normalized) {
@@ -152,7 +291,7 @@ export function assignSlotsToSections(slots: GenerationSlot[], sections: ExamSec
 
     if (slot.question_type && normalizedSlotType !== normalizedSectionType) {
       console.warn(
-        `TOS slot ${slot.item_number} uses question_type "${slot.question_type}" while section ${section.label} is typed as "${section.questionType}". Preserving the TOS slot type and assigning by item range.`
+        `TOS slot ${slot.item_number} requests "${slot.question_type}" but section ${section.label} of the selected exam format is "${section.questionType}". The selected exam format is the source of truth — enforcing "${section.questionType}".`
       );
     }
 
@@ -162,7 +301,7 @@ export function assignSlotsToSections(slots: GenerationSlot[], sections: ExamSec
       section_label: section.label,
       section_title: section.title,
       points_per_question: section.pointsPerQuestion,
-      question_type: normalizedSlotType || normalizedSectionType
+      question_type: normalizedSectionType
     };
   });
 }
