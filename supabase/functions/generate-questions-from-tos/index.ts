@@ -586,8 +586,8 @@ function expandTOSToSlots(distributions: TopicDistribution[], totalItems: number
             requestedQuestionType === 'short_answer' ||
             requestedQuestionType === 'essay'
           ) {
-            questionType = requestedQuestionType;
-            points = POINTS[requestedQuestionType] ?? points;
+            questionType = requestedQuestionType as typeof questionType;
+            points = (POINTS as Record<string, number>)[requestedQuestionType] ?? points;
           }
           
           const thisItem = slotId++;
