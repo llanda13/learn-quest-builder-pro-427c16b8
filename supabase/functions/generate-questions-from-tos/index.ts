@@ -45,6 +45,8 @@ interface GenerationInput {
   allow_unapproved?: boolean;
   prefer_existing?: boolean;
   force_ai_generation?: boolean;
+  requested_question_type?: string;
+  existing_stems?: string[];
 }
 
 /**
@@ -484,7 +486,7 @@ function calculateQuestionTypeDistribution(totalItems: number): QuestionTypeDist
 /**
  * STEP 1: Lock the TOS and expand into slots with question types
  */
-function expandTOSToSlots(distributions: TopicDistribution[], totalItems: number): Slot[] {
+function expandTOSToSlots(distributions: TopicDistribution[], totalItems: number, requestedQuestionType?: string): Slot[] {
   const slots: Slot[] = [];
   let slotId = 1;
 
@@ -575,6 +577,18 @@ function expandTOSToSlots(distributions: TopicDistribution[], totalItems: number
             }
           }
           // MCQ: Default for everything else
+
+          // Honor the caller's requested question type (exam-format enforcement):
+          // per-slot generation requests must produce the section's type.
+          if (
+            requestedQuestionType === 'mcq' ||
+            requestedQuestionType === 'true_false' ||
+            requestedQuestionType === 'short_answer' ||
+            requestedQuestionType === 'essay'
+          ) {
+            questionType = requestedQuestionType as typeof questionType;
+            points = (POINTS as Record<string, number>)[requestedQuestionType] ?? points;
+          }
           
           const thisItem = slotId++;
           slots.push({
@@ -2516,16 +2530,28 @@ serve(async (req) => {
     console.log(`📊 Total items requested: ${body.total_items}`);
     console.log(`📚 Topics: ${body.distributions.map(d => d.topic).join(', ')}`);
 
+    // Seed the dedup blacklist with stems already accepted by the caller so
+    // per-slot retry requests cannot regenerate previously accepted questions.
+    const seededStems = Array.isArray(body.existing_stems)
+      ? body.existing_stems
+          .filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
+          .slice(0, 400)
+      : [];
+
     const registry: GenerationRegistry = {
       usedConcepts: {},
       usedOperations: {},
       usedPairs: [],
-      usedQuestionTexts: [],
-      compiledItemStems: []
+      usedQuestionTexts: seededStems.map(s => s.toLowerCase()),
+      compiledItemStems: [...seededStems]
     };
 
+    if (seededStems.length > 0) {
+      console.log(`🚫 Seeded dedup blacklist with ${seededStems.length} previously accepted stem(s)`);
+    }
+
     // STEP 1: Expand TOS into slots with question types
-    const allSlots = expandTOSToSlots(body.distributions, body.total_items);
+    const allSlots = expandTOSToSlots(body.distributions, body.total_items, body.requested_question_type);
 
     // STEP 1b: Load TOS metadata so we can re-inject SUBJECT CONTEXT into every batch
     // (prevents AI drift on technical subjects during long generation runs)

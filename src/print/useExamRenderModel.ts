@@ -13,6 +13,10 @@ export interface RawTestItem {
   difficulty?: string;
   bloom_level?: string;
   topic?: string;
+  question_number?: number;
+  section_id?: string;
+  section_label?: string;
+  section_title?: string;
 }
 
 export interface RawTest {
@@ -149,28 +153,62 @@ export function buildExamRenderModel(
   opts: { college?: string | null; showAnswerKey?: boolean } = {},
 ): ExamRenderModel {
   const items = Array.isArray(test?.items) ? (test!.items as RawTestItem[]) : [];
-  const buckets: Record<SectionKind, RawTestItem[]> = {
-    mcq: [],
-    true_false: [],
-    fill_blank: [],
-    essay: [],
-  };
-  for (const it of items) {
-    const k = classify(it.question_type || it.type);
-    if (k) buckets[k].push(it);
-  }
-
-  const order: SectionKind[] = ["mcq", "true_false", "fill_blank", "essay"];
   const sections: RenderSection[] = [];
   const answerKey: { number: number; answer: string }[] = [];
+
+  interface SectionGroup {
+    key: string;
+    storedLabel?: string;
+    storedTitle?: string;
+    items: RawTestItem[];
+  }
+
+  // Format-aware tests store section metadata on each item (BUG 2 FIX): group by
+  // the stored section so the selected exam format's layout renders exactly as
+  // saved. Legacy tests without section metadata keep type-based grouping.
+  const useStoredSections = items.some((it) => it.section_id || it.section_label);
+  const groups: SectionGroup[] = [];
+  if (useStoredSections) {
+    const byKey = new Map<string, SectionGroup>();
+    for (const it of items) {
+      const key = String(it.section_id || it.section_label);
+      let group = byKey.get(key);
+      if (!group) {
+        group = { key, storedLabel: it.section_label, storedTitle: it.section_title, items: [] };
+        byKey.set(key, group);
+        groups.push(group);
+      }
+      group.items.push(it);
+    }
+    for (const group of groups) {
+      group.items.sort((a, b) => (a.question_number ?? 0) - (b.question_number ?? 0));
+    }
+  } else {
+    const buckets: Record<SectionKind, RawTestItem[]> = {
+      mcq: [],
+      true_false: [],
+      fill_blank: [],
+      essay: [],
+    };
+    for (const it of items) {
+      const k = classify(it.question_type || it.type);
+      if (k) buckets[k].push(it);
+    }
+    const order: SectionKind[] = ["mcq", "true_false", "fill_blank", "essay"];
+    for (const kind of order) {
+      if (buckets[kind].length === 0) continue;
+      groups.push({ key: kind, items: buckets[kind] });
+    }
+  }
+
   let counter = 1;
   let testIdx = 1;
-  for (const kind of order) {
-    const raw = buckets[kind];
-    if (raw.length === 0) continue;
+  for (const group of groups) {
+    const kind = classify(group.items[0]?.question_type || group.items[0]?.type) || "mcq";
     const meta = SECTION_META[kind];
-    const renderItems: RenderItem[] = raw.map((it) => {
-      const number = counter++;
+    const title = useStoredSections ? String(group.storedTitle || meta.title) : meta.title;
+    const renderItems: RenderItem[] = group.items.map((it) => {
+      const number = useStoredSections && it.question_number != null ? it.question_number : counter++;
       const ans = it.correct_answer ?? it.correctAnswer ?? "—";
       const item: RenderItem = {
         number,
@@ -184,8 +222,8 @@ export function buildExamRenderModel(
     });
     sections.push({
       kind,
-      label: `TEST ${toRoman(testIdx)}. ${meta.title}`,
-      title: meta.title,
+      label: `TEST ${toRoman(testIdx)}. ${title.toUpperCase()}`,
+      title: title.toUpperCase(),
       instruction: meta.instruction,
       items: renderItems,
     });

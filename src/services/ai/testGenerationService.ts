@@ -507,7 +507,7 @@ export async function generateQuestionsWithAI(
   criteria: TOSCriteria,
   count: number,
   userId: string,
-  options?: { slotNumber?: number; slotId?: string }
+  options?: { slotNumber?: number; slotId?: string; existingStems?: string[] }
 ): Promise<any[]> {
   console.log(`   🤖 Calling AI generation edge function...`);
   console.log(`      Topic: ${criteria.topic}, Bloom: ${criteria.bloom_level}, Difficulty: ${criteria.difficulty}, Count: ${count}`);
@@ -548,6 +548,19 @@ export async function generateQuestionsWithAI(
     prefer_existing: false,
     force_ai_generation: true
   };
+
+  // BUG 1: seed the edge function's dedup blacklist with stems already accepted
+  // in this exam so retry requests cannot regenerate the same question.
+  if (options?.existingStems?.length) {
+    invokeBody.existing_stems = options.existingStems.slice(0, 300);
+  }
+
+  // BUG 2: the edge function must generate the section's question type instead
+  // of its internal default type distribution.
+  const requestedType = normalizeQuestionType(criteria.question_type);
+  if (requestedType) {
+    invokeBody.requested_question_type = requestedType === 'fill_blank' ? 'short_answer' : requestedType;
+  }
 
   if (options?.slotId) invokeBody.target_slot_id = options.slotId;
 
