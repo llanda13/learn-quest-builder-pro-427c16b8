@@ -342,8 +342,14 @@ function validateGeneratedPlanQuestions(plan: GenerationSlot[], questions: Secti
     if (question.difficulty !== slot.difficulty) {
       errors.push(`Slot ${slot.item_number} difficulty mismatch: expected "${slot.difficulty}", got "${question.difficulty}".`);
     }
-    if (question.question_type !== (slot.question_type || question.question_type)) {
+    if (normalizeQuestionType(question.question_type) !== normalizeQuestionType(slot.question_type)) {
       errors.push(`Slot ${slot.item_number} question type mismatch: expected "${slot.question_type}", got "${question.question_type}".`);
+    }
+    if (question.section_id !== slot.section_id) {
+      errors.push(`Slot ${slot.item_number} section mismatch: expected "${slot.section_id}", got "${question.section_id}".`);
+    }
+    if (slot.question_type === 'mcq' && !hasUsableChoices(question)) {
+      errors.push(`Slot ${slot.item_number} is multiple choice but has no answer choices.`);
     }
 
     actualTopicCounts.set(question.topic, (actualTopicCounts.get(question.topic) || 0) + 1);
