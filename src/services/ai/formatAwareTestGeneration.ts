@@ -420,7 +420,8 @@ export async function generateFormatAwareTest(
 
   const allQuestions: SectionedQuestion[] = new Array(requiredTotal);
   const answerKey: any[] = [];
-  const allQuestionTexts = new Set<string>();
+  const dedupTracker = createExamDeduplicationTracker();
+  const unfilledItemNumbers: number[] = [];
   const sectionMap = new Map(scaledSections.map((section) => [section.id, section]));
 
   for (const slot of sectionedSlots) {
@@ -452,29 +453,48 @@ export async function generateFormatAwareTest(
     let chosen: any = null;
 
     for (const candidate of candidates) {
-      const candidateText = String(candidate.question_text || '').trim().toLowerCase();
-      if (allQuestionTexts.has(candidateText)) continue;
+      if (requiresChoices(slot.question_type) && !hasUsableChoices(candidate)) {
+        continue;
+      }
+      const dedupCheck = dedupTracker.check(candidate);
+      if (dedupCheck.duplicate) {
+        console.log(`   🔄 Skipping duplicate bank candidate for slot #${slot.item_number}: ${dedupCheck.reason}`);
+        continue;
+      }
       chosen = candidate;
       break;
     }
 
     if (!chosen) {
-      console.log(`   ⚠️ No exact bank candidate for slot #${slot.item_number}; generating AI content.`);
-      const generated = await generateQuestionsWithAI(
-        {
-          topic: slot.topic,
-          bloom_level: slot.bloom_level,
-          difficulty: slot.difficulty,
-          count: 1,
-          type: slot.question_type || 'mcq'
-        } as any,
-        1,
-        user.id,
-        { slotNumber: slot.item_number }
-      );
-      chosen = generated[0] || null;
-      if (!chosen) {
-        throw new Error(`AI generation failed for slot ${slot.item_number}.`);
+      console.log(`   ⚠️ No unique bank candidate for slot #${slot.item_number}; generating AI content.`);
+      const MAX_SLOT_ATTEMPTS = 3;
+      for (let attempt = 1; attempt <= MAX_SLOT_ATTEMPTS && !chosen; attempt += 1) {
+        const generated = await generateQuestionsWithAI(
+          {
+            topic: slot.topic,
+            bloom_level: slot.bloom_level,
+            difficulty: slot.difficulty,
+            count: 1,
+            type: slot.question_type || 'mcq'
+          } as any,
+          1,
+          user.id,
+          { slotNumber: slot.item_number, existingStems: dedupTracker.getAcceptedStems() }
+        );
+        for (const generatedQuestion of generated) {
+          if (!generatedQuestion) continue;
+          if (requiresChoices(slot.question_type) && !hasUsableChoices(generatedQuestion)) {
+            console.log(`   🔄 Rejected AI question for slot #${slot.item_number}: multiple choice without answer choices`);
+            continue;
+          }
+          const dedupCheck = dedupTracker.check(generatedQuestion);
+          if (dedupCheck.duplicate) {
+            console.log(`   🔄 Rejected duplicate AI question for slot #${slot.item_number} (attempt ${attempt}): ${dedupCheck.reason}`);
+            continue;
+          }
+          chosen = generatedQuestion;
+          break;
+        }
       }
     } else {
       try {
@@ -482,6 +502,12 @@ export async function generateFormatAwareTest(
       } catch {
         // ignore marking failures
       }
+    }
+
+    if (!chosen) {
+      console.warn(`   ⚠️ Slot #${slot.item_number} could not be filled with a unique question.`);
+      unfilledItemNumbers.push(slot.item_number);
+      continue;
     }
 
     const section = sectionMap.get(slot.section_id!);
@@ -499,8 +525,8 @@ export async function generateFormatAwareTest(
       difficulty: slot.difficulty
     } as SectionedQuestion;
 
+    dedupTracker.register(question);
     allQuestions[slot.item_number - 1] = question;
-    allQuestionTexts.add(String(question.question_text || '').trim().toLowerCase());
 
     answerKey.push({
       question_number: question.question_number,
@@ -518,68 +544,70 @@ export async function generateFormatAwareTest(
     }
   }
 
+  // ============= COMPLETION FALLBACK FOR UNFILLED SLOTS =============
+  for (const itemNumber of unfilledItemNumbers) {
+    if (allQuestions[itemNumber - 1]) continue;
+    const slot = sectionedSlots[itemNumber - 1];
+    const section = sectionMap.get(slot.section_id!);
+    const criterion = config.tosCriteria.find(
+      (c) => c.topic === slot.topic && c.bloom_level === slot.bloom_level
+    ) || config.tosCriteria[0] || {
+      topic: slot.topic,
+      bloom_level: slot.bloom_level,
+      difficulty: slot.difficulty,
+      count: 1
+    };
+    const fallback = generateTypedQuestion(section.questionType, criterion, itemNumber, user.id);
+    const dedupCheck = dedupTracker.check(fallback);
+    if (dedupCheck.duplicate) {
+      console.warn(`   ⚠️ Fallback question for slot #${itemNumber} rejected: ${dedupCheck.reason}`);
+      continue;
+    }
+    dedupTracker.register(fallback);
+    const mapped = {
+      ...fallback,
+      question_number: itemNumber,
+      section_id: slot.section_id,
+      section_label: slot.section_label,
+      section_title: slot.section_title,
+      question_type: section.questionType,
+      points: section.pointsPerQuestion,
+      needs_review: true,
+      validation_notes: 'Final completion fallback used after generation shortfall'
+    } as SectionedQuestion;
+
+    allQuestions[itemNumber - 1] = mapped;
+    answerKey.push({
+      question_number: mapped.question_number,
+      display_number: String(mapped.question_number),
+      question_id: mapped.id,
+      correct_answer: mapped.correct_answer,
+      section: mapped.section_label,
+      question_type: mapped.question_type,
+      points: mapped.points
+    });
+
+    const targetSection = sectionResults.find((s) => s.id === slot.section_id);
+    if (targetSection) {
+      targetSection.questions.push(mapped);
+      targetSection.totalPoints += mapped.points;
+    }
+  }
+
+  // ============= HARD INCOMPLETE-EXAM GATE =============
+  const stillUnfilled: number[] = [];
+  for (let i = 1; i <= requiredTotal; i += 1) {
+    if (!allQuestions[i - 1]) stillUnfilled.push(i);
+  }
+  if (stillUnfilled.length > 0) {
+    throw new Error(
+      `Generation incomplete: ${requiredTotal - stillUnfilled.length} of ${requiredTotal} slots filled; ${stillUnfilled.length} unfilled (items: ${stillUnfilled.join(', ')}). No incomplete exam was saved.`
+    );
+  }
+
   validateGeneratedPlanQuestions(sectionedSlots, allQuestions);
 
   let totalPoints = sectionResults.reduce((sum, s) => sum + s.totalPoints, 0);
-
-  // ============= FINAL VALIDATION GATE =============
-  console.log(`\n📊 FINAL VALIDATION: ${allQuestions.length}/${requiredTotal} questions generated`);
-  
-  if (allQuestions.length < requiredTotal) {
-    const shortfall = requiredTotal - allQuestions.length;
-    console.warn(`🛟 Final format-aware completion fallback: ${allQuestions.length}/${requiredTotal}; adding ${shortfall} questions`);
-    const fallbackSection = scaledSections[0] || {
-      id: 'completion-fallback',
-      label: 'A',
-      title: 'Completion Fallback',
-      instruction: 'Answer each item.',
-      questionType: 'mcq' as QuestionType,
-      startNumber: 1,
-      endNumber: shortfall,
-      pointsPerQuestion: 1
-    };
-    const fallbackCriterion = config.tosCriteria.find(c => c.count > 0) || config.tosCriteria[0] || {
-      topic: 'General Topic',
-      bloom_level: 'Understanding',
-      difficulty: 'Average',
-      count: shortfall
-    };
-
-    for (let i = 0; i < shortfall; i++) {
-      const questionNumber = allQuestions.length + 1;
-      const fallback = generateTypedQuestion(fallbackSection.questionType, fallbackCriterion, questionNumber, user.id);
-      const mapped = {
-        ...fallback,
-        question_number: questionNumber,
-        section_id: fallbackSection.id,
-        section_label: fallbackSection.label,
-        section_title: fallbackSection.title,
-        question_type: fallbackSection.questionType,
-        points: fallbackSection.pointsPerQuestion,
-        needs_review: true,
-        validation_notes: 'Final completion fallback used after generation shortfall'
-      } as SectionedQuestion;
-
-      allQuestions.push(mapped);
-      answerKey.push({
-        question_number: mapped.question_number,
-        display_number: String(mapped.question_number),
-        question_id: mapped.id,
-        correct_answer: mapped.correct_answer,
-        section: mapped.section_label,
-        question_type: mapped.question_type,
-        points: mapped.points
-      });
-
-      const targetSection = sectionResults.find(section => section.id === fallbackSection.id);
-      if (targetSection) {
-        targetSection.questions.push(mapped);
-        targetSection.totalPoints += mapped.points;
-      }
-    }
-
-    totalPoints = sectionResults.reduce((sum, s) => sum + s.totalPoints, 0);
-  }
 
   console.log(`✅ TOS CONTRACT SATISFIED: ${allQuestions.length}/${requiredTotal} questions`);
 
