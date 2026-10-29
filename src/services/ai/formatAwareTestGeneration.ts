@@ -489,6 +489,12 @@ export async function generateFormatAwareTest(
         );
         for (const generatedQuestion of generated) {
           if (!generatedQuestion) continue;
+          if (normalizeQuestionType(generatedQuestion.question_type) !== slot.question_type) {
+            console.log(
+              `   🔄 Rejected AI question for slot #${slot.item_number}: expected type "${slot.question_type}", got "${generatedQuestion.question_type}"`
+            );
+            continue;
+          }
           if (requiresChoices(slot.question_type) && !hasUsableChoices(generatedQuestion)) {
             console.log(`   🔄 Rejected AI question for slot #${slot.item_number}: multiple choice without answer choices`);
             continue;
