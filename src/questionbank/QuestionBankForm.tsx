@@ -12,6 +12,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
+import { Questions } from "@/services/db/questions";
+import { useAcademicHierarchy } from "@/hooks/useAcademicHierarchy";
 import { Plus, Trash2 } from "lucide-react";
 
 const questionSchema = z.object({
@@ -75,7 +77,10 @@ export function QuestionBankForm({ onSuccess }: QuestionBankFormProps) {
   });
 
   const [choices, setChoices] = useState<string[]>(draft.choices ?? ["", "", "", ""]);
+  const [subjectId, setSubjectId] = useState("");
   const { toast } = useToast();
+  const hierarchy = useAcademicHierarchy();
+  const selectedSubject = hierarchy.allSubjects.find((subject) => subject.id === subjectId);
 
   const form = useForm<QuestionFormData>({
     resolver: zodResolver(questionSchema),
@@ -117,9 +122,15 @@ export function QuestionBankForm({ onSuccess }: QuestionBankFormProps) {
   };
 
   const onSubmit = async (data: QuestionFormData) => {
+    if (!selectedSubject) {
+      toast({
+        title: "Registered subject required",
+        description: "Select an academic subject from the registered subject list before saving.",
+        variant: "destructive",
+      });
+      return;
+    }
     try {
-      const { supabase } = await import('@/integrations/supabase/client')
-      
       const questionData = {
         topic: data.topic,
         question_text: data.text,
@@ -132,16 +143,18 @@ export function QuestionBankForm({ onSuccess }: QuestionBankFormProps) {
         bloom_level: data.bloom_level,
         difficulty: data.difficulty,
         knowledge_dimension: data.knowledge_dimension,
+        category: selectedSubject.category_name || "",
+        specialization: selectedSubject.specialization_name || "",
+        subject: `${selectedSubject.code} - ${selectedSubject.description}`,
+        subject_code: selectedSubject.code,
+        subject_description: selectedSubject.description,
+        metadata: { academic_subject_id: selectedSubject.id },
         created_by: "teacher",
         approved: false,
         needs_review: false
       };
 
-      const { error } = await supabase
-        .from('questions')
-        .insert([questionData])
-
-      if (error) throw error
+      await Questions.create(questionData);
       
       toast({
         title: "Question Added",
@@ -150,6 +163,7 @@ export function QuestionBankForm({ onSuccess }: QuestionBankFormProps) {
 
       form.reset();
       setChoices(["", "", "", ""]);
+      setSubjectId("");
       clearDraft();
       clearPersistedState(DRAFT_KEY);
       onSuccess();
@@ -157,7 +171,7 @@ export function QuestionBankForm({ onSuccess }: QuestionBankFormProps) {
       console.error('Error saving question:', error)
       toast({
         title: "Error",
-        description: "Failed to add question. Please try again.",
+        description: error instanceof Error ? error.message : "Failed to add question. Please try again.",
         variant: "destructive",
       });
     }
@@ -171,6 +185,21 @@ export function QuestionBankForm({ onSuccess }: QuestionBankFormProps) {
       <CardContent>
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
+            <div className="space-y-2">
+              <Label htmlFor="registered-subject">Registered academic subject</Label>
+              <Select value={subjectId} onValueChange={setSubjectId}>
+                <SelectTrigger id="registered-subject">
+                  <SelectValue placeholder="Select a subject" />
+                </SelectTrigger>
+                <SelectContent>
+                  {hierarchy.allSubjects.map((subject) => (
+                    <SelectItem key={subject.id} value={subject.id}>
+                      {subject.code} - {subject.description}
+                    </SelectItem>
+                  ))}
+                </SelectContent>
+              </Select>
+            </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
               <FormField
                 control={form.control}

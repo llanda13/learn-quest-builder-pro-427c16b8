@@ -26,6 +26,26 @@ Object.defineProperty(window, 'matchMedia', {
   }),
 });
 
+// Radix Select uses pointer capture APIs that jsdom does not implement.
+Object.defineProperties(HTMLElement.prototype, {
+  scrollIntoView: {
+    configurable: true,
+    value: () => {},
+  },
+  hasPointerCapture: {
+    configurable: true,
+    value: () => false,
+  },
+  setPointerCapture: {
+    configurable: true,
+    value: () => {},
+  },
+  releasePointerCapture: {
+    configurable: true,
+    value: () => {},
+  },
+});
+
 // Mock IntersectionObserver
 global.IntersectionObserver = class IntersectionObserver {
   constructor() {}

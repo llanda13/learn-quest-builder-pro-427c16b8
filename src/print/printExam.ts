@@ -65,7 +65,13 @@ function renderHeader(model: ExamRenderModel, logoDataUrl: string): string {
 
 function renderSection(section: ExamRenderModel["sections"][number]): string {
   const items = section.items
-    .map((item) => {
+    .map((item, index) => {
+      const previousItem = section.items[index - 1];
+      const promptHeading = section.kind === "essay" &&
+        item.essayPromptGroupId &&
+        item.essayPromptGroupId !== previousItem?.essayPromptGroupId
+        ? `<h3 class="essay-prompt-label">Essay Prompt ${item.essayPromptNumber} (Items ${item.essayPromptStartNumber}–${item.essayPromptEndNumber})</h3>`
+        : "";
       if (section.kind === "mcq") {
         const opts = item.options
           .map(
@@ -75,14 +81,14 @@ function renderSection(section: ExamRenderModel["sections"][number]): string {
               )}</span></div>`,
           )
           .join("");
-        return `
+        return `${promptHeading}
           <div class="q mcq">
             <div class="q-line"><span class="num">${item.number}.</span><span>${escapeHtml(item.text)}</span></div>
             ${opts ? `<div class="opts">${opts}</div>` : ""}
           </div>`;
       }
       if (section.kind === "true_false") {
-        return `
+        return `${promptHeading}
           <div class="q tf">
             <span class="num">${item.number}.</span>
             <span class="blank-short"></span>
@@ -90,7 +96,7 @@ function renderSection(section: ExamRenderModel["sections"][number]): string {
           </div>`;
       }
       if (section.kind === "fill_blank") {
-        return `
+        return `${promptHeading}
           <div class="q fb">
             <span class="num">${item.number}.</span>
             <span>${escapeHtml(item.text)}</span>
@@ -100,7 +106,7 @@ function renderSection(section: ExamRenderModel["sections"][number]): string {
       const lines = Array.from({ length: Math.max(5, item.points * 2) })
         .map(() => `<div class="essay-line"></div>`)
         .join("");
-      return `
+      return `${promptHeading}
         <div class="q essay">
           <div class="q-line">
             <span class="num">${item.number}.</span>
@@ -125,7 +131,14 @@ function renderAnswerKey(model: ExamRenderModel): string {
   if (!model.showAnswerKey) return "";
   const cols = model.answerKey.length > 40 ? 3 : 2;
   const items = model.answerKey
-    .map((k) => `<li>${escapeHtml(k.answer)}</li>`)
+    .map((item, index) => {
+      const previousItem = model.answerKey[index - 1];
+      const promptHeading = item.essayPromptGroupId &&
+        item.essayPromptGroupId !== previousItem?.essayPromptGroupId
+        ? `<strong class="essay-key-prompt">Essay Prompt ${item.essayPromptNumber} rubric (Items ${item.essayPromptStartNumber}–${item.essayPromptEndNumber})</strong>`
+        : "";
+      return `<li>${promptHeading}${escapeHtml(item.answer)}</li>`;
+    })
     .join("");
   return `
     <section class="answer-key">

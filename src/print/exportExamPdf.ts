@@ -279,7 +279,21 @@ function drawSection(ctx: Ctx, section: ExamRenderModel["sections"][number]) {
   ctx.y += 2;
 
   // Items
+  let previousEssayPromptGroupId: string | undefined;
   for (const item of section.items) {
+    if (
+      section.kind === "essay" &&
+      item.essayPromptGroupId &&
+      item.essayPromptGroupId !== previousEssayPromptGroupId
+    ) {
+      const heading = `Essay Prompt ${item.essayPromptNumber} (Items ${item.essayPromptStartNumber}-${item.essayPromptEndNumber})`;
+      ensureSpace(ctx, lineHeight(FS.secLabel) + 2);
+      setFont(pdf, FS.secLabel, "bold");
+      pdf.text(heading, MARGIN.x, ctx.y + lineHeight(FS.secLabel) - 1.2);
+      ctx.y += lineHeight(FS.secLabel) + 1;
+    }
+    if (section.kind === "essay") previousEssayPromptGroupId = item.essayPromptGroupId;
+
     if (section.kind === "mcq") {
       // Try to keep question + first row of options together by snapshotting y
       const qH = measureQuestionHeight(pdf, item.text, 6, FS.question);
@@ -376,7 +390,12 @@ function drawAnswerKey(ctx: Ctx, model: ExamRenderModel) {
       const idx = c * perCol + r;
       if (idx >= model.answerKey.length) break;
       const item = model.answerKey[idx];
-      const line = `${item.number}. ${item.answer}`;
+      const startsPrompt = item.essayPromptGroupId &&
+        item.essayPromptGroupId !== model.answerKey[idx - 1]?.essayPromptGroupId;
+      const prompt = startsPrompt
+        ? `Essay Prompt ${item.essayPromptNumber} (Items ${item.essayPromptStartNumber}-${item.essayPromptEndNumber}): `
+        : "";
+      const line = `${item.number}. ${prompt}${item.answer}`;
       pdf.text(line, x, ctx.y + lh * r + lh - 1.2);
     }
   }

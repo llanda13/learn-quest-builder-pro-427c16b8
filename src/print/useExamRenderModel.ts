@@ -17,6 +17,11 @@ export interface RawTestItem {
   section_id?: string;
   section_label?: string;
   section_title?: string;
+  section_instruction?: string;
+  essay_prompt_group_id?: string;
+  essay_prompt_number?: number;
+  essay_prompt_start_number?: number;
+  essay_prompt_end_number?: number;
 }
 
 export interface RawTest {
@@ -42,6 +47,20 @@ export interface RenderItem {
   points: number;
   correctAnswer: string;
   options: { key: string; text: string }[]; // populated for mcq only
+  essayPromptGroupId?: string;
+  essayPromptNumber?: number;
+  essayPromptStartNumber?: number;
+  essayPromptEndNumber?: number;
+}
+
+export interface RenderAnswerKeyItem {
+  number: number;
+  answer: string;
+  questionType?: string;
+  essayPromptGroupId?: string;
+  essayPromptNumber?: number;
+  essayPromptStartNumber?: number;
+  essayPromptEndNumber?: number;
 }
 
 export interface RenderSection {
@@ -67,7 +86,7 @@ export interface ExamRenderModel {
   totalPoints: number;
   totalQuestions: number;
   sections: RenderSection[];
-  answerKey: { number: number; answer: string }[];
+  answerKey: RenderAnswerKeyItem[];
   showAnswerKey: boolean;
 }
 
@@ -153,35 +172,35 @@ export function buildExamRenderModel(
   opts: { college?: string | null; showAnswerKey?: boolean } = {},
 ): ExamRenderModel {
   const items = Array.isArray(test?.items) ? (test!.items as RawTestItem[]) : [];
-  const sections: RenderSection[] = [];
-  const answerKey: { number: number; answer: string }[] = [];
-
-  interface SectionGroup {
-    key: string;
-    storedLabel?: string;
-    storedTitle?: string;
+  const hasSectionMetadata = items.some((item) => item.section_id || item.section_label);
+  const sectionGroups: Array<{
+    id: string;
+    kind: SectionKind;
     items: RawTestItem[];
-  }
-
-  // Format-aware tests store section metadata on each item (BUG 2 FIX): group by
-  // the stored section so the selected exam format's layout renders exactly as
-  // saved. Legacy tests without section metadata keep type-based grouping.
-  const useStoredSections = items.some((it) => it.section_id || it.section_label);
-  const groups: SectionGroup[] = [];
-  if (useStoredSections) {
-    const byKey = new Map<string, SectionGroup>();
-    for (const it of items) {
-      const key = String(it.section_id || it.section_label);
-      let group = byKey.get(key);
+    label?: string;
+    title?: string;
+    instruction?: string;
+  }> = [];
+  if (hasSectionMetadata) {
+    const groups = new Map<string, (typeof sectionGroups)[number]>();
+    for (const item of items) {
+      const kind = classify(item.question_type || item.type);
+      if (!kind) continue;
+      const key = item.section_id || item.section_label || `type-${kind}`;
+      let group = groups.get(key);
       if (!group) {
-        group = { key, storedLabel: it.section_label, storedTitle: it.section_title, items: [] };
-        byKey.set(key, group);
-        groups.push(group);
+        group = {
+          id: key,
+          kind,
+          items: [],
+          label: item.section_label,
+          title: item.section_title,
+          instruction: item.section_instruction
+        };
+        groups.set(key, group);
+        sectionGroups.push(group);
       }
-      group.items.push(it);
-    }
-    for (const group of groups) {
-      group.items.sort((a, b) => (a.question_number ?? 0) - (b.question_number ?? 0));
+      group.items.push(item);
     }
   } else {
     const buckets: Record<SectionKind, RawTestItem[]> = {
@@ -190,25 +209,27 @@ export function buildExamRenderModel(
       fill_blank: [],
       essay: [],
     };
-    for (const it of items) {
-      const k = classify(it.question_type || it.type);
-      if (k) buckets[k].push(it);
+    for (const item of items) {
+      const kind = classify(item.question_type || item.type);
+      if (kind) buckets[kind].push(item);
     }
-    const order: SectionKind[] = ["mcq", "true_false", "fill_blank", "essay"];
-    for (const kind of order) {
-      if (buckets[kind].length === 0) continue;
-      groups.push({ key: kind, items: buckets[kind] });
+    for (const kind of ["mcq", "true_false", "fill_blank", "essay"] as SectionKind[]) {
+      if (buckets[kind].length > 0) {
+        sectionGroups.push({ id: kind, kind, items: buckets[kind] });
+      }
     }
   }
 
+  const sections: RenderSection[] = [];
+  const answerKey: RenderAnswerKeyItem[] = [];
   let counter = 1;
   let testIdx = 1;
-  for (const group of groups) {
-    const kind = classify(group.items[0]?.question_type || group.items[0]?.type) || "mcq";
+  for (const group of sectionGroups) {
+    const { kind, items: raw } = group;
     const meta = SECTION_META[kind];
-    const title = useStoredSections ? String(group.storedTitle || meta.title) : meta.title;
-    const renderItems: RenderItem[] = group.items.map((it) => {
-      const number = useStoredSections && it.question_number != null ? it.question_number : counter++;
+    const renderItems: RenderItem[] = raw.map((it) => {
+      const number = typeof it.question_number === "number" ? it.question_number : counter;
+      counter = Math.max(counter, number + 1);
       const ans = it.correct_answer ?? it.correctAnswer ?? "—";
       const item: RenderItem = {
         number,
@@ -216,15 +237,27 @@ export function buildExamRenderModel(
         points: it.points || 1,
         correctAnswer: String(ans),
         options: kind === "mcq" ? buildOptions(it) : [],
+        essayPromptGroupId: it.essay_prompt_group_id,
+        essayPromptNumber: it.essay_prompt_number,
+        essayPromptStartNumber: it.essay_prompt_start_number,
+        essayPromptEndNumber: it.essay_prompt_end_number,
       };
-      answerKey.push({ number, answer: item.correctAnswer });
+      answerKey.push({
+        number,
+        answer: item.correctAnswer,
+        questionType: kind,
+        essayPromptGroupId: it.essay_prompt_group_id,
+        essayPromptNumber: it.essay_prompt_number,
+        essayPromptStartNumber: it.essay_prompt_start_number,
+        essayPromptEndNumber: it.essay_prompt_end_number
+      });
       return item;
     });
     sections.push({
       kind,
-      label: `TEST ${toRoman(testIdx)}. ${title.toUpperCase()}`,
-      title: title.toUpperCase(),
-      instruction: meta.instruction,
+      label: group.label || `TEST ${toRoman(testIdx)}. ${meta.title}`,
+      title: group.title || meta.title,
+      instruction: group.instruction || meta.instruction,
       items: renderItems,
     });
     testIdx++;
