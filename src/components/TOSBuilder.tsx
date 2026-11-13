@@ -874,9 +874,21 @@ export const TOSBuilder = ({ onBack }: TOSBuilderProps) => {
       
       setGenerationProgress(40);
       setGenerationStatus("Querying question bank and generating questions...");
-      
+
+      const activeSubject = await AcademicHierarchy.lookupSubjectByCode(tosMatrix.subject_no);
+      if (!activeSubject) {
+        throw new Error(`Subject code "${tosMatrix.subject_no}" is not registered in the academic subject list. Add or select a registered subject before generating questions.`);
+      }
+
       const testMetadata = {
-        subject: tosMatrix.subject_no || tosMatrix.course,
+        subject: activeSubject.code,
+        subject_no: activeSubject.code,
+        subject_code: activeSubject.code,
+        academic_subject_id: activeSubject.id,
+        description: activeSubject.description,
+        subject_description: activeSubject.description,
+        category: activeSubject.category_name,
+        specialization: activeSubject.specialization_name,
         course: tosMatrix.course,
         year_section: tosMatrix.year_section,
         exam_period: tosMatrix.exam_period,

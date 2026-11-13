@@ -14,6 +14,8 @@ import { classifyQuestions } from "@/services/edgeFunctions";
 import BulkImport from "./BulkImport";
 import { QuestionForm } from "./QuestionForm";
 import { supabase } from "@/integrations/supabase/client";
+import { useAcademicHierarchy } from "@/hooks/useAcademicHierarchy";
+import { normalizeKnowledgeDimension } from "@/types/knowledge";
 
 interface EnhancedQuestionBankProps {
   onBack: () => void;
@@ -27,6 +29,7 @@ export default function EnhancedQuestionBank({ onBack }: EnhancedQuestionBankPro
   const [selectedTopic, setSelectedTopic] = useState<string>("");
   const [selectedBloomLevel, setSelectedBloomLevel] = useState<string>("");
   const [selectedDifficulty, setSelectedDifficulty] = useState<string>("");
+  const [generationSubjectId, setGenerationSubjectId] = useState("");
   const [showApprovedOnly, setShowApprovedOnly] = useState(false);
   const [showBulkImport, setShowBulkImport] = useState(false);
   const [showQuestionForm, setShowQuestionForm] = useState(false);
@@ -35,6 +38,8 @@ export default function EnhancedQuestionBank({ onBack }: EnhancedQuestionBankPro
   const { toast } = useToast();
   const { profile, isAdmin } = useProfile();
   const { questions: realtimeQuestions } = useRealtimeQuestions();
+  const hierarchy = useAcademicHierarchy();
+  const generationSubject = hierarchy.allSubjects.find(subject => subject.id === generationSubjectId);
 
   // Sync realtime questions with local state
   useEffect(() => {
@@ -161,7 +166,7 @@ export default function EnhancedQuestionBank({ onBack }: EnhancedQuestionBankPro
           correct_answer: row['Correct Answer'] || row.correct_answer || 'A',
           bloom_level: classification?.bloom_level || 'Understanding',
           difficulty: classification?.difficulty || 'Average',
-          knowledge_dimension: classification?.knowledge_dimension || 'Conceptual',
+          knowledge_dimension: normalizeKnowledgeDimension(classification?.knowledge_dimension),
           created_by: 'teacher',
           approved: false,
           ai_confidence_score: classification?.confidence || 0.5,
@@ -188,9 +193,16 @@ export default function EnhancedQuestionBank({ onBack }: EnhancedQuestionBankPro
 
   const generateQuestionsWithAI = async () => {
     try {
+      if (!generationSubject) {
+        toast({ title: "Subject required", description: "Select a registered academic subject before generating questions.", variant: "destructive" });
+        return;
+      }
       const response = await supabase.functions.invoke('generate-questions', {
         body: {
-          tos_id: 'temp',
+          subject_code: generationSubject.code,
+          subject_description: generationSubject.description,
+          category: generationSubject.category_name,
+          specialization: generationSubject.specialization_name,
           request: {
             topic: selectedTopic || 'General',
             bloom_level: selectedBloomLevel || 'Understanding',
@@ -324,6 +336,17 @@ export default function EnhancedQuestionBank({ onBack }: EnhancedQuestionBankPro
           <CardTitle>Filters & Search</CardTitle>
         </CardHeader>
         <CardContent className="space-y-4">
+          <div className="max-w-md space-y-2">
+            <label className="text-sm font-medium">Subject for AI generation</label>
+            <Select value={generationSubjectId} onValueChange={setGenerationSubjectId}>
+              <SelectTrigger><SelectValue placeholder="Select a registered subject" /></SelectTrigger>
+              <SelectContent>
+                {hierarchy.allSubjects.map(subject => (
+                  <SelectItem key={subject.id} value={subject.id}>{subject.code} - {subject.description}</SelectItem>
+                ))}
+              </SelectContent>
+            </Select>
+          </div>
           <div className="grid grid-cols-1 md:grid-cols-4 gap-4">
             <Input
               placeholder="Search questions..."

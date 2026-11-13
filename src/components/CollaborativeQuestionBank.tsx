@@ -10,7 +10,10 @@ import { useCollaborativeEditing } from '@/hooks/useCollaborativeEditing';
 import { CollaborationIndicator } from './CollaborationIndicator';
 import { useRealtime } from '@/hooks/useRealtime';
 import { supabase } from '@/integrations/supabase/client';
+import { useAcademicHierarchy } from '@/hooks/useAcademicHierarchy';
+import { Questions as QuestionStore } from '@/services/db/questions';
 import { toast } from 'sonner';
+import type { Json } from '@/integrations/supabase/types';
 
 interface Question {
   id?: string;
@@ -21,6 +24,12 @@ interface Question {
   bloom_level: string;
   difficulty: string;
   topic: string;
+  category?: string;
+  specialization?: string;
+  subject?: string;
+  subject_code?: string;
+  subject_description?: string;
+  metadata?: Json;
   knowledge_dimension: string;
   created_by: string;
 }
@@ -31,6 +40,7 @@ export const CollaborativeQuestionBank: React.FC = () => {
   const [isCreating, setIsCreating] = useState(false);
   const [loading, setLoading] = useState(true);
   const [lastSync, setLastSync] = useState<string>('');
+  const hierarchy = useAcademicHierarchy();
 
   const documentId = 'question-bank-shared';
   
@@ -96,13 +106,7 @@ export const CollaborativeQuestionBank: React.FC = () => {
   const saveQuestion = async (question: Question) => {
     try {
       if (question.id) {
-        // Update existing question
-        const { error } = await supabase
-          .from('questions')
-          .update(question)
-          .eq('id', question.id);
-        
-        if (error) throw error;
+        await QuestionStore.update(question.id, question);
         
         const updatedQuestions = questions.map(q => 
           q.id === question.id ? question : q
@@ -111,14 +115,7 @@ export const CollaborativeQuestionBank: React.FC = () => {
         broadcastChange({ questions: updatedQuestions });
         toast.success('Question updated successfully');
       } else {
-        // Create new question
-        const { data, error } = await supabase
-          .from('questions')
-          .insert([question])
-          .select()
-          .single();
-        
-        if (error) throw error;
+        const data = await QuestionStore.create(question);
         
         const updatedQuestions = [data, ...questions];
         setQuestions(updatedQuestions);
@@ -127,7 +124,7 @@ export const CollaborativeQuestionBank: React.FC = () => {
       }
     } catch (error) {
       console.error('Error saving question:', error);
-      toast.error('Failed to save question');
+      toast.error(error instanceof Error ? error.message : 'Failed to save question');
     }
   };
 
@@ -226,6 +223,45 @@ export const CollaborativeQuestionBank: React.FC = () => {
               <CardContent>
                 <form onSubmit={handleSubmit} className="space-y-4">
                   <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+                    <div className="md:col-span-2">
+                      <label className="text-sm font-medium">Registered subject</label>
+                      <Select
+                        value={hierarchy.allSubjects.find(subject => subject.code === editingQuestion?.subject_code)?.id || ''}
+                        onValueChange={(subjectId) => {
+                          const subject = hierarchy.allSubjects.find(item => item.id === subjectId);
+                          if (!subject) return;
+                          setEditingQuestion(prev => {
+                            if (!prev) return null;
+                            const existingMetadata = prev.metadata
+                              && typeof prev.metadata === 'object'
+                              && !Array.isArray(prev.metadata)
+                              ? prev.metadata
+                              : {};
+                            return {
+                              ...prev,
+                              category: subject.category_name || '',
+                              specialization: subject.specialization_name || '',
+                              subject: `${subject.code} - ${subject.description}`,
+                              subject_code: subject.code,
+                              subject_description: subject.description,
+                              metadata: {
+                                ...existingMetadata,
+                                academic_subject_id: subject.id,
+                              },
+                            };
+                          });
+                        }}
+                      >
+                        <SelectTrigger><SelectValue placeholder="Select an academic subject" /></SelectTrigger>
+                        <SelectContent>
+                          {hierarchy.allSubjects.map(subject => (
+                            <SelectItem key={subject.id} value={subject.id}>
+                              {subject.code} - {subject.description}
+                            </SelectItem>
+                          ))}
+                        </SelectContent>
+                      </Select>
+                    </div>
                     <div>
                       <label className="text-sm font-medium">Topic</label>
                       <Input

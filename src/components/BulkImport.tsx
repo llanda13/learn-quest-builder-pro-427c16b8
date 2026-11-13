@@ -17,9 +17,9 @@ import { Questions } from '@/services/db/questions';
 import { classifyQuestions } from '@/services/edgeFunctions';
 import { classifyBloom, detectKnowledgeDimension, inferDifficulty } from '@/services/ai/classify';
 import { useTaxonomyClassification } from '@/hooks/useTaxonomyClassification';
-import { resolveSubjectMetadata } from '@/services/ai/subjectMetadataResolver';
 import { normalizeCategory, normalizeSpecialization } from '@/utils/acronymNormalizer';
 import { useAcademicHierarchy } from '@/hooks/useAcademicHierarchy';
+import { normalizeKnowledgeDimension } from '@/types/knowledge';
 
 // Persistent draft keys — survive tab switches, refreshes, and brief disconnects
 // so admins never lose a half-verified bulk import.
@@ -76,6 +76,7 @@ interface ParsedQuestion {
   specialization?: string;
   subject_code?: string;
   subject_description?: string;
+  metadata?: { academic_subject_id: string };
 }
 
 interface ImportStats {
@@ -1073,6 +1074,8 @@ export default function BulkImport({
         q.specialization = fixedContext.specialization;
         q.subject_code = fixedContext.subject_code;
         q.subject_description = fixedContext.subject_description;
+        q.subject = `${fixedContext.subject_code} - ${fixedContext.subject_description}`;
+        q.metadata = { academic_subject_id: fixedSubjectId };
       });
 
       // ===== TOPIC IDENTIFICATION INTENTIONALLY SKIPPED DURING BULK IMPORT =====
@@ -1118,12 +1121,6 @@ export default function BulkImport({
     setImportStep('processing');
 
     try {
-      const validKnowledgeDimensions = ['factual', 'conceptual', 'procedural', 'metacognitive'];
-      const normalizeKD = (val: string | undefined): string => {
-        const n = (val || 'conceptual').toLowerCase().trim();
-        return validKnowledgeDimensions.includes(n) ? n : 'conceptual';
-      };
-
       const normalizeDifficulty = (val: string | undefined): string => {
         const n = (val || 'average').toLowerCase().trim();
         const difficultyMap: Record<string, string> = {
@@ -1161,7 +1158,7 @@ export default function BulkImport({
         correct_answer: q.correct_answer || '',
         bloom_level: (q.bloom_level || 'understanding').toLowerCase(),
         difficulty: normalizeDifficulty(q.difficulty),
-        knowledge_dimension: normalizeKD(q.knowledge_dimension),
+        knowledge_dimension: normalizeKnowledgeDimension(q.knowledge_dimension),
         created_by: 'teacher' as const,
         approved: false,
         ai_confidence_score: q.ai_confidence_score || 0.5,
@@ -1170,6 +1167,7 @@ export default function BulkImport({
         specialization: q.specialization || '',
         subject_code: q.subject_code || '',
         subject_description: q.subject_description || '',
+        metadata: q.metadata,
       }));
 
       setProgress(40);

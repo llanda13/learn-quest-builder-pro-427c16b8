@@ -14,6 +14,7 @@ import { EdgeFunctions } from '@/services/edgeFunctions';
 import { classifyQuestion } from '@/services/ai/classify';
 import { TaxonomyMatrixSelector } from '@/components/classification/TaxonomyMatrixSelector';
 import { toast } from 'sonner';
+import { useAcademicHierarchy } from '@/hooks/useAcademicHierarchy';
 
 interface QuestionFormProps {
   onSave: (question: any) => void;
@@ -43,9 +44,14 @@ export const QuestionForm: React.FC<QuestionFormProps> = ({
 
   const [saving, setSaving] = useState(false);
   const [classifying, setClassifying] = useState(false);
+  const [subjectId, setSubjectId] = useState('');
+  const hierarchy = useAcademicHierarchy();
+  const selectedSubject = hierarchy.allSubjects.find((subject) => subject.id === subjectId);
 
   useEffect(() => {
     if (existingQuestion) {
+      const existingSubject = hierarchy.allSubjects.find((subject) => subject.code === existingQuestion.subject_code);
+      setSubjectId(existingSubject?.id || '');
       setFormData({
         question_text: existingQuestion.question_text || '',
         question_type: existingQuestion.question_type || 'mcq',
@@ -61,7 +67,7 @@ export const QuestionForm: React.FC<QuestionFormProps> = ({
         ai_confidence_score: existingQuestion.ai_confidence_score ?? 1.0
       });
     }
-  }, [existingQuestion]);
+  }, [existingQuestion, hierarchy.allSubjects]);
 
   const handleAutoClassify = async () => {
     if (!formData.question_text.trim()) {
@@ -146,6 +152,10 @@ export const QuestionForm: React.FC<QuestionFormProps> = ({
       toast.error('Please enter a topic');
       return;
     }
+    if (!selectedSubject) {
+      toast.error('Select a registered academic subject before saving this question');
+      return;
+    }
 
     // Validate multiple choice questions
     if (formData.question_type === 'mcq') {
@@ -170,6 +180,12 @@ export const QuestionForm: React.FC<QuestionFormProps> = ({
         bloom_level: formData.bloom_level,
         difficulty: formData.difficulty,
         knowledge_dimension: formData.knowledge_dimension,
+        category: selectedSubject.category_name || '',
+        specialization: selectedSubject.specialization_name || '',
+        subject: `${selectedSubject.code} - ${selectedSubject.description}`,
+        subject_code: selectedSubject.code,
+        subject_description: selectedSubject.description,
+        metadata: { academic_subject_id: selectedSubject.id },
         choices: formData.question_type === 'mcq' 
           ? formData.choices.reduce((acc, choice, index) => {
               if (choice.trim()) {
@@ -199,7 +215,7 @@ export const QuestionForm: React.FC<QuestionFormProps> = ({
 
     } catch (error) {
       console.error('Error saving question:', error);
-      toast.error('Failed to save question');
+      toast.error(error instanceof Error ? error.message : 'Failed to save question');
     } finally {
       setSaving(false);
     }
@@ -215,6 +231,21 @@ export const QuestionForm: React.FC<QuestionFormProps> = ({
       </CardHeader>
       
       <CardContent className="space-y-6 p-6">
+        <div>
+          <Label htmlFor="registered-question-subject">Registered academic subject</Label>
+          <Select value={subjectId} onValueChange={setSubjectId}>
+            <SelectTrigger id="registered-question-subject">
+              <SelectValue placeholder="Select a subject" />
+            </SelectTrigger>
+            <SelectContent>
+              {hierarchy.allSubjects.map((subject) => (
+                <SelectItem key={subject.id} value={subject.id}>
+                  {subject.code} - {subject.description}
+                </SelectItem>
+              ))}
+            </SelectContent>
+          </Select>
+        </div>
         {/* Basic Question Info */}
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div>
