@@ -37,6 +37,19 @@ ON public.rubrics
 FOR DELETE 
 USING (true);
 
+-- Define the timestamp trigger function before creating triggers that use it.
+CREATE OR REPLACE FUNCTION public.update_updated_at_column()
+RETURNS trigger
+LANGUAGE plpgsql
+SECURITY DEFINER
+SET search_path = public
+AS $$
+BEGIN
+  NEW.updated_at = now();
+  RETURN NEW;
+END;
+$$;
+
 -- Create trigger for automatic timestamp updates
 CREATE TRIGGER update_rubrics_updated_at
 BEFORE UPDATE ON public.rubrics
