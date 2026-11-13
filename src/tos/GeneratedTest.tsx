@@ -6,7 +6,6 @@ import { Download, ArrowLeft, FileText, CheckCircle, Printer, Key } from "lucide
 import { TOSData } from "@/pages/TOS"
 import { usePDFExport } from "@/hooks/usePDFExport"
 import { useToast } from "@/hooks/use-toast"
-import { ExamPrintTemplate } from "@/components/print/ExamPrintTemplate"
 
 interface GeneratedTestProps {
   tosData: TOSData
@@ -67,33 +66,9 @@ export function GeneratedTest({ tosData, testQuestions, onBack }: GeneratedTestP
     URL.revokeObjectURL(url)
   }
 
-  // Transform testQuestions to match the test structure expected by ExamPrintTemplate
-  const printTestData = {
-    title: `${tosData.description} - ${tosData.examPeriod} Exam`,
-    subject: tosData.description,
-    course: tosData.course,
-    year_section: tosData.yearSection,
-    exam_period: tosData.examPeriod,
-    school_year: tosData.schoolYear,
-    items: testQuestions.map(q => ({
-      question_text: q.question,
-      question_type: q.type === 'multiple-choice' ? 'mcq' : q.type,
-      choices: q.options,
-      correct_answer: q.correctAnswer,
-      points: q.points,
-      difficulty: q.difficulty,
-      bloom_level: q.bloomLevel,
-      topic: q.topicName
-    }))
-  };
-
   return (
-    <>
-      {/* Print-only exam template */}
-      <ExamPrintTemplate test={printTestData} showAnswerKey={false} />
-      
-      {/* Screen UI - hidden when printing */}
-      <div className="space-y-6 screen-only">
+    <div className="space-y-6">
+      {/* Header with Test Summary */}
       <Card>
         <CardHeader>
           <div className="flex items-center justify-between">
@@ -203,8 +178,7 @@ export function GeneratedTest({ tosData, testQuestions, onBack }: GeneratedTestP
           </div>
         </CardContent>
       </Card>
-      </div>
-    </>
+    </div>
   )
 }
 

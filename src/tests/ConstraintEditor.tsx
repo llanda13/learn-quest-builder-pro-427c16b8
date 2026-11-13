@@ -59,10 +59,10 @@ export function ConstraintEditor({
           {constraints.filter(c => c.type.startsWith('topic')).map(constraint => (
             <div key={constraint.id} className="flex items-center gap-4">
               <select
-                aria-label="Select topic"
                 value={constraint.target}
                 onChange={(e) => updateConstraint(constraint.id, { target: e.target.value })}
                 className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm"
+                aria-label={`Select topic for ${constraint.type === 'topic_min' ? 'minimum' : 'maximum'} constraint`}
               >
                 {topics.map(topic => (
                   <option key={topic} value={topic}>{topic}</option>
@@ -115,10 +115,10 @@ export function ConstraintEditor({
           {constraints.filter(c => c.type === 'bloom_required').map(constraint => (
             <div key={constraint.id} className="flex items-center gap-4">
               <select
-                aria-label="Select bloom level"
                 value={constraint.target}
                 onChange={(e) => updateConstraint(constraint.id, { target: e.target.value })}
                 className="flex h-9 w-full rounded-md border border-input bg-background px-3 py-1 text-sm"
+                aria-label="Select Bloom's taxonomy level for requirement constraint"
               >
                 {bloomLevels.map(level => (
                   <option key={level} value={level}>{level}</option>
