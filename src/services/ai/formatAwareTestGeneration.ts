@@ -657,6 +657,7 @@ export interface FormatAwareRepairTest {
   id: string;
   format_id?: string | null;
   tos_id?: string | null;
+  validation_status?: string | null;
   items?: unknown;
   answer_key?: unknown;
 }
@@ -667,6 +668,15 @@ export async function repairFormatAwareTest(test: FormatAwareRepairTest): Promis
   answer_key: Array<Record<string, unknown>>;
   replacedQuestionNumbers: number[];
 }> {
+  if (test.validation_status === 'pending_validation' || test.validation_status === 'validated') {
+    return {
+      repaired: false,
+      items: Array.isArray(test.items) ? test.items as SectionedQuestion[] : [],
+      answer_key: Array.isArray(test.answer_key) ? test.answer_key as Array<Record<string, unknown>> : [],
+      replacedQuestionNumbers: []
+    };
+  }
+
   if (!test.tos_id) {
     throw new Error(`Cannot safely repair examination ${test.id}: it is not linked to its original TOS.`);
   }

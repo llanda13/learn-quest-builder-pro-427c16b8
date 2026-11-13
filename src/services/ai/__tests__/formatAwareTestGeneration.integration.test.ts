@@ -612,6 +612,32 @@ describe('format-aware generation workflow integration', () => {
     expect(mocks.state.examUpdates[0]).toMatchObject({ format_id: FORMAT_1.id });
   });
 
+  it.each(['pending_validation', 'validated'])(
+    'does not attempt auto-repair for a %s questionnaire',
+    async (validationStatus) => {
+      const items = [{ question_number: 1, question_text: 'Existing submitted item' }];
+      const answerKey = [{ question_number: 1, correct_answer: 'A' }];
+
+      const repair = await repairFormatAwareTest({
+        id: 'locked-test',
+        format_id: FORMAT_1.id,
+        tos_id: 'tos-1',
+        validation_status: validationStatus,
+        items,
+        answer_key: answerKey
+      });
+
+      expect(repair).toEqual({
+        repaired: false,
+        items,
+        answer_key: answerKey,
+        replacedQuestionNumbers: []
+      });
+      expect(mocks.state.examUpdates).toHaveLength(0);
+      expect(mocks.state.edgeCalls).toHaveLength(0);
+    }
+  );
+
   it('rejects a bank duplicate during repair and replaces it with a unique item', async () => {
     const generated = await generateFormatAwareTest({
       format: FORMAT_1,

@@ -24,6 +24,7 @@ export function useTestAutoRepair(testId: string | undefined) {
         id: testId,
         format_id: test.format_id,
         tos_id: test.tos_id,
+        validation_status: test.validation_status,
         items: test.items,
         answer_key: test.answer_key
       });
