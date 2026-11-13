@@ -1,9 +1,12 @@
 // Question service - handles all question-related database operations
 import { supabase } from "@/integrations/supabase/client";
 import type { Database } from "@/integrations/supabase/types";
-import type { KnowledgeDimension } from "@/types/knowledge";
-import { quickClassifyKnowledgeDimension } from "@/services/analysis/knowledgeDeterminer";
-import { deduplicateSubjectCode, batchDeduplicateSubjectCodes } from "@/services/db/subjectDeduplication";
+import { normalizeKnowledgeDimension, type KnowledgeDimension } from "@/types/knowledge";
+import {
+  assertSubjectAssignmentUnchanged,
+  mergeQuestionMetadata,
+  withCanonicalQuestionSubject,
+} from "@/services/db/questionSubjectMetadata";
 
 export type Question = Database['public']['Tables']['questions']['Row'];
 export type QuestionInsert = Database['public']['Tables']['questions']['Insert'];
@@ -15,6 +18,7 @@ export interface QuestionFilters {
   difficulty?: string;
   approved?: boolean;
   subject?: string;
+  subject_code?: string;
   grade_level?: string;
   term?: string;
   tags?: string[];
@@ -51,6 +55,9 @@ export const Questions = {
     }
     if (filters.subject) {
       query = query.eq('subject', filters.subject);
+    }
+    if (filters.subject_code) {
+      query = query.eq('subject_code', filters.subject_code);
     }
     if (filters.grade_level) {
       query = query.eq('grade_level', filters.grade_level);
@@ -89,23 +96,11 @@ export const Questions = {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error('User not authenticated');
 
-    // Auto-classify knowledge dimension if not provided
-    let knowledgeDimension = question.knowledge_dimension;
-    if (!knowledgeDimension && question.question_text) {
-      knowledgeDimension = quickClassifyKnowledgeDimension(question.question_text);
-    }
-
-    const questionData = {
+    const questionData = await withCanonicalQuestionSubject({
       ...question,
-      knowledge_dimension: knowledgeDimension,
-      approved: false
-    };
-
-    // Deduplicate subject code before inserting
-    await deduplicateSubjectCode(
-      questionData.subject_description,
-      questionData.subject_code
-    );
+      knowledge_dimension: normalizeKnowledgeDimension(question.knowledge_dimension),
+      approved: question.approved ?? false
+    });
 
     const { data, error } = await supabase
       .from('questions')
@@ -118,9 +113,41 @@ export const Questions = {
   },
 
   async update(id: string, updates: Partial<QuestionUpdate>): Promise<Question> {
+    const subjectFieldsUpdated = [
+      "category",
+      "specialization",
+      "subject",
+      "subject_code",
+      "subject_description",
+    ].some((field) => Object.prototype.hasOwnProperty.call(updates, field));
+    const metadataUpdated = Object.prototype.hasOwnProperty.call(updates, "metadata");
+    let questionUpdates = Object.prototype.hasOwnProperty.call(updates, "knowledge_dimension")
+      ? {
+          ...updates,
+          knowledge_dimension: normalizeKnowledgeDimension(updates.knowledge_dimension),
+        }
+      : updates;
+    if (subjectFieldsUpdated || metadataUpdated) {
+      const { data: current, error: currentError } = await supabase
+        .from("questions")
+        .select("category, specialization, subject, subject_code, subject_description, metadata")
+        .eq("id", id)
+        .single();
+      if (currentError) throw currentError;
+
+      assertSubjectAssignmentUnchanged(current, updates);
+
+      questionUpdates = await withCanonicalQuestionSubject({
+        ...current,
+        ...questionUpdates,
+        metadata: mergeQuestionMetadata(current.metadata, updates.metadata),
+      });
+      assertSubjectAssignmentUnchanged(current, questionUpdates);
+    }
+
     const { data, error } = await supabase
       .from('questions')
-      .update(updates)
+      .update(questionUpdates)
       .eq('id', id)
       .select('*')
       .single();
@@ -142,21 +169,13 @@ export const Questions = {
     const { data: { user } } = await supabase.auth.getUser();
     if (!user) throw new Error('User not authenticated');
 
-    // Auto-classify knowledge dimension for each question
-    const questionsData = questions.map(q => {
-      let knowledgeDimension = q.knowledge_dimension;
-      if (!knowledgeDimension && q.question_text) {
-        knowledgeDimension = quickClassifyKnowledgeDimension(q.question_text);
-      }
-      return {
+    const questionsData = await Promise.all(questions.map(async q =>
+      withCanonicalQuestionSubject({
         ...q,
-        knowledge_dimension: knowledgeDimension,
-        approved: false
-      };
-    });
-
-    // Deduplicate subject codes before inserting
-    await batchDeduplicateSubjectCodes(questionsData);
+        knowledge_dimension: normalizeKnowledgeDimension(q.knowledge_dimension),
+        approved: q.approved ?? false
+      })
+    ));
 
     const { data, error } = await supabase
       .from('questions')
@@ -262,16 +281,19 @@ export const Questions = {
       semantic_vector?: string;
     }
   ): Promise<Question> {
+    const updates = {
+      cognitive_level: classification.cognitive_level,
+      bloom_level: classification.cognitive_level,
+      ...(classification.knowledge_dimension === undefined
+        ? {}
+        : { knowledge_dimension: normalizeKnowledgeDimension(classification.knowledge_dimension) }),
+      classification_confidence: classification.confidence,
+      semantic_vector: classification.semantic_vector,
+      updated_at: new Date().toISOString()
+    };
     const { data, error } = await supabase
       .from('questions')
-      .update({
-        cognitive_level: classification.cognitive_level,
-        bloom_level: classification.cognitive_level, // Keep in sync
-        knowledge_dimension: classification.knowledge_dimension,
-        classification_confidence: classification.confidence,
-        semantic_vector: classification.semantic_vector,
-        updated_at: new Date().toISOString()
-      })
+      .update(updates)
       .eq('id', questionId)
       .select('*')
       .single();

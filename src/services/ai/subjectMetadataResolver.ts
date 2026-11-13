@@ -1,265 +1,172 @@
-/**
- * Subject Metadata Resolver
- * Resolves category, specialization, subject_code, and subject_description
- * for AI-generated questions based on context (topic, subject string, etc.)
- * 
- * If a match is found in the CATEGORY_CONFIG, it assigns the correct values.
- * If no match exists, it creates a new entry. If a description matches but
- * with a different code, it updates to the correct code.
- */
-
-import { CATEGORY_CONFIG, type SubjectEntry } from '@/config/questionBankFilters';
-import { normalizeCategory, normalizeSpecialization } from '@/utils/acronymNormalizer';
+import { AcademicHierarchy } from "@/services/db/academicHierarchy";
+import { supabase } from "@/integrations/supabase/client";
+import { normalizeCategory, normalizeSpecialization } from "@/utils/acronymNormalizer";
 
 export interface SubjectMetadata {
+  academic_subject_id: string;
   category: string;
   specialization: string;
   subject_code: string;
   subject_description: string;
 }
 
-/**
- * Resolve subject metadata from a subject string, topic, or other context.
- * Searches CATEGORY_CONFIG for matching subject descriptions or codes.
- * 
- * @param context - Object containing available context fields
- * @returns Resolved SubjectMetadata or best-effort assignment
- */
-export function resolveSubjectMetadata(context: {
-  subject?: string;
-  topic?: string;
-  subject_code?: string;
-  subject_description?: string;
-  category?: string;
-  specialization?: string;
-}): SubjectMetadata {
-  // Normalize acronyms/full forms before processing
-  const category = normalizeCategory(context.category) || undefined;
-  const specialization = normalizeSpecialization(context.specialization) || undefined;
-  const { subject, topic, subject_code, subject_description } = context;
+export interface SubjectMetadataContext {
+  academic_subject_id?: string | null;
+  subject?: string | null;
+  topic?: string | null;
+  subject_code?: string | null;
+  subject_description?: string | null;
+  category?: string | null;
+  specialization?: string | null;
+}
 
-  // If all fields are already provided, validate and return
-  if (category && specialization && subject_code && subject_description) {
-    return { category, specialization, subject_code, subject_description };
+export async function resolveTosSubjectMetadata(tosId: string): Promise<SubjectMetadata> {
+  const { data, error } = await supabase
+    .from("tos_entries")
+    .select("subject_no, course, description")
+    .eq("id", tosId)
+    .single();
+
+  if (error) throw new Error(`Unable to load TOS subject metadata: ${error.message}`);
+  if (!data?.subject_no?.trim()) {
+    throw new Error(`TOS "${tosId}" has no registered subject code. No questions were saved.`);
   }
 
-  // Try to find a match in CATEGORY_CONFIG
-  const searchTerms = [
-    subject_description,
-    subject,
-    topic,
-  ].filter(Boolean) as string[];
+  const normalize = (value?: string | null) => normalizeText(value);
+  const matchingSubjects = (await AcademicHierarchy.getSubjects()).filter((subject) =>
+    normalize(subject.code) === normalize(data.subject_no)
+  );
+  const officialDescriptions = [normalize(data.course), normalize(data.description)].filter(Boolean);
+  const candidates = matchingSubjects.length > 1
+    ? matchingSubjects.filter((subject) => officialDescriptions.includes(normalize(subject.description)))
+    : matchingSubjects;
 
-  // Strategy 1: Match by subject_code + category + specialization
-  if (subject_code && category && specialization) {
-    const config = CATEGORY_CONFIG[category];
-    if (config) {
-      const spec = config.specializations.find(s => s.name === specialization);
-      if (spec) {
-        const subj = spec.subjects.find(s => s.code === subject_code);
-        if (subj) {
-          return { category, specialization, subject_code, subject_description: subj.description };
-        }
-      }
-    }
+  if (candidates.length !== 1) {
+    throw new Error(`TOS subject "${data.subject_no}" does not resolve to exactly one registered academic subject. No questions were saved.`);
   }
 
-  // Strategy 2: Match by subject description across all categories
-  for (const term of searchTerms) {
-    const match = findByDescription(term);
-    if (match) return match;
-  }
-
-  // Strategy 3: Match by subject code if provided
-  if (subject_code) {
-    const match = findByCode(subject_code, category, specialization);
-    if (match) return match;
-  }
-
-  // Strategy 4: Fuzzy match - check if any search term contains or is contained by a known description
-  for (const term of searchTerms) {
-    const match = findByFuzzyDescription(term);
-    if (match) return match;
-  }
-
-  // Strategy 5: Infer from subject string pattern like "101 - Introduction to Computing"
-  if (subject) {
-    const codeMatch = subject.match(/^(\d+)\s*[-–]\s*(.+)$/);
-    if (codeMatch) {
-      const [, code, desc] = codeMatch;
-      const match = findByDescription(desc.trim()) || findByCode(code, category, specialization);
-      if (match) return match;
-    }
-  }
-
-  // No match found - create a new entry with best available info
-  const resolvedDescription = subject_description || extractDescription(subject) || topic || '';
-  const resolvedCode = subject_code || extractCode(subject) || generateNewCode(resolvedDescription);
-
+  const subject = candidates[0];
   return {
-    category: category || inferCategory(resolvedDescription, topic),
-    specialization: specialization || inferSpecialization(resolvedDescription, topic),
-    subject_code: resolvedCode,
-    subject_description: resolvedDescription,
+    academic_subject_id: subject.id,
+    category: subject.category_name || "",
+    specialization: subject.specialization_name || "",
+    subject_code: subject.code,
+    subject_description: subject.description,
   };
 }
 
-/**
- * Find exact match by description in CATEGORY_CONFIG
- */
-function findByDescription(description: string): SubjectMetadata | null {
-  const normalizedDesc = description.toLowerCase().trim();
-  
-  for (const [cat, config] of Object.entries(CATEGORY_CONFIG)) {
-    for (const spec of config.specializations) {
-      for (const subj of spec.subjects) {
-        if (subj.description.toLowerCase().trim() === normalizedDesc) {
-          return {
-            category: cat,
-            specialization: spec.name,
-            subject_code: subj.code,
-            subject_description: subj.description,
-          };
-        }
-      }
-    }
+export async function resolveGeneratedQuestionSubject(
+  question: SubjectMetadataContext,
+  tosId?: string | null
+): Promise<SubjectMetadata> {
+  if (!tosId) return resolveSubjectMetadata(question);
+
+  const tosSubject = await resolveTosSubjectMetadata(tosId);
+  if (question.academic_subject_id && question.academic_subject_id !== tosSubject.academic_subject_id) {
+    throw new Error(`Generated question academic subject ID conflicts with TOS subject "${tosSubject.subject_code}". No question was saved.`);
   }
-  return null;
-}
-
-/**
- * Fuzzy match by checking if search term contains or is contained by a known description
- */
-function findByFuzzyDescription(term: string): SubjectMetadata | null {
-  const normalizedTerm = term.toLowerCase().trim();
-  let bestMatch: { metadata: SubjectMetadata; score: number } | null = null;
-
-  for (const [cat, config] of Object.entries(CATEGORY_CONFIG)) {
-    for (const spec of config.specializations) {
-      for (const subj of spec.subjects) {
-        const normalizedDesc = subj.description.toLowerCase().trim();
-        
-        // Check containment in both directions
-        if (normalizedTerm.includes(normalizedDesc) || normalizedDesc.includes(normalizedTerm)) {
-          const score = Math.min(normalizedTerm.length, normalizedDesc.length) / 
-                       Math.max(normalizedTerm.length, normalizedDesc.length);
-          
-          if (!bestMatch || score > bestMatch.score) {
-            bestMatch = {
-              metadata: {
-                category: cat,
-                specialization: spec.name,
-                subject_code: subj.code,
-                subject_description: subj.description,
-              },
-              score,
-            };
-          }
-        }
-      }
+  const generatedCode = question.subject_code?.trim() || extractCode(question.subject);
+  const generatedDescription = question.subject_description?.trim() || extractDescription(question.subject);
+  const supplied = [
+    ["subject code", generatedCode, tosSubject.subject_code],
+    ["subject description", generatedDescription, tosSubject.subject_description],
+    ["category", question.category, tosSubject.category],
+    ["specialization", question.specialization, tosSubject.specialization],
+  ] as const;
+  for (const [label, value, canonical] of supplied) {
+    if (value?.trim() && normalizeText(value) !== normalizeText(canonical)) {
+      throw new Error(`Generated question ${label} conflicts with TOS subject "${tosSubject.subject_code}". No question was saved.`);
     }
   }
 
-  return bestMatch && bestMatch.score > 0.3 ? bestMatch.metadata : null;
+  return tosSubject;
+}
+
+function extractCode(subject?: string | null): string | undefined {
+  const match = subject?.trim().match(/^([A-Za-z][A-Za-z0-9 -]*?\s*\d+|\d+)\s*[-–]/);
+  return match?.[1]?.trim();
+}
+
+function extractDescription(subject?: string | null): string | undefined {
+  return subject?.trim().match(/^[^-–]+?\s*[-–]\s*(.+)$/)?.[1]?.trim();
+}
+
+function normalizeText(value?: string | null): string {
+  return value?.trim().replace(/\s+/g, " ").toLocaleLowerCase() || "";
 }
 
 /**
- * Find match by subject code, optionally scoped to category/specialization
+ * Resolve subject metadata only from an active academic_subjects record.
+ * Topic names are deliberately never considered a subject code or description.
  */
-function findByCode(code: string, category?: string, specialization?: string): SubjectMetadata | null {
-  const categories = category ? { [category]: CATEGORY_CONFIG[category] } : CATEGORY_CONFIG;
+export async function resolveSubjectMetadata(
+  context: SubjectMetadataContext
+): Promise<SubjectMetadata> {
+  const subjectCode = context.subject_code?.trim() || extractCode(context.subject);
+  const description = context.subject_description?.trim() || extractDescription(context.subject);
+  const allSubjects = await AcademicHierarchy.getSubjects();
+  let candidates = context.academic_subject_id
+    ? allSubjects.filter((candidate) => candidate.id === context.academic_subject_id)
+    : [];
 
-  for (const [cat, config] of Object.entries(categories)) {
-    if (!config) continue;
-    const specs = specialization 
-      ? config.specializations.filter(s => s.name === specialization)
-      : config.specializations;
-
-    for (const spec of specs) {
-      const subj = spec.subjects.find(s => s.code === code);
-      if (subj) {
-        return {
-          category: cat,
-          specialization: spec.name,
-          subject_code: subj.code,
-          subject_description: subj.description,
-        };
-      }
-    }
+  if (context.academic_subject_id && candidates.length !== 1) {
+    throw new Error(`Academic subject "${context.academic_subject_id}" is not registered. No question was saved.`);
   }
-  return null;
-}
+  if (subjectCode) {
+    candidates = candidates.length
+      ? candidates.filter((candidate) => normalizeText(candidate.code) === normalizeText(subjectCode))
+      : allSubjects.filter((candidate) => normalizeText(candidate.code) === normalizeText(subjectCode));
+  } else if (description && candidates.length === 0) {
+    candidates = allSubjects.filter((candidate) =>
+      normalizeText(candidate.description) === normalizeText(description)
+    );
+  } else if (!subjectCode && !description && candidates.length === 0) {
+    candidates = [];
+  }
 
-/**
- * Extract code from a subject string like "101 - Introduction to Computing"
- */
-function extractCode(subject?: string): string {
-  if (!subject) return '';
-  const match = subject.match(/^(\d+)/);
-  return match ? match[1] : '';
-}
+  if (candidates.length > 1) {
+    candidates = candidates.filter((candidate) =>
+      (!description || normalizeText(candidate.description) === normalizeText(description))
+      && (!context.category || normalizeCategory(candidate.category_name) === normalizeCategory(context.category))
+      && (!context.specialization || normalizeSpecialization(candidate.specialization_name) === normalizeSpecialization(context.specialization))
+    );
+  }
+  if (candidates.length > 1) {
+    throw new Error(`Subject "${subjectCode || description}" matches multiple academic subjects. Select a specific registered subject.`);
+  }
 
-/**
- * Extract description from a subject string like "101 - Introduction to Computing"
- */
-function extractDescription(subject?: string): string {
-  if (!subject) return '';
-  const match = subject.match(/^\d+\s*[-–]\s*(.+)$/);
-  return match ? match[1].trim() : subject;
-}
+  const resolvedSubject = candidates[0] || null;
+  if (!resolvedSubject) {
+    const supplied = subjectCode || description || context.subject || context.topic || "unknown";
+    throw new Error(`Subject "${supplied}" is not registered in the academic subject list. No question was saved.`);
+  }
 
-/**
- * Generate a new subject code based on description keywords
- */
-function generateNewCode(description: string): string {
-  if (!description) return '999';
-  // Simple hash-based code generation
-  const hash = description.split('').reduce((acc, char) => acc + char.charCodeAt(0), 0);
-  return String(100 + (hash % 900));
-}
+  if (subjectCode && resolvedSubject.code.trim().toLocaleLowerCase() !== subjectCode.toLocaleLowerCase()) {
+    throw new Error(`Resolved subject code "${resolvedSubject.code}" conflicts with supplied code "${subjectCode}".`);
+  }
+  if (context.academic_subject_id && resolvedSubject.id !== context.academic_subject_id) {
+    throw new Error(`Academic subject ID conflicts with subject code "${subjectCode}".`);
+  }
+  const category = normalizeCategory(context.category);
+  const specialization = normalizeSpecialization(context.specialization);
+  const officialCategory = normalizeCategory(resolvedSubject.category_name) || resolvedSubject.category_name || "";
+  const officialSpecialization = normalizeSpecialization(resolvedSubject.specialization_name) || resolvedSubject.specialization_name || "";
 
-/**
- * Infer category from description/topic keywords
- */
-function inferCategory(description: string, topic?: string): string {
-  const text = `${description} ${topic || ''}`.toLowerCase();
-  
-  // Check for Major-related keywords
-  const majorKeywords = ['programming', 'computing', 'database', 'network', 'software', 'algorithm',
-    'data structure', 'web development', 'information system', 'computer science', 'game', 'animation',
-    'artificial intelligence', 'operating system', 'security', 'architecture', 'multimedia'];
-  
-  if (majorKeywords.some(kw => text.includes(kw))) return 'Major';
-  
-  // Check for GE-related keywords
-  const geKeywords = ['mathematics', 'calculus', 'algebra', 'statistics', 'physical education',
-    'english', 'filipino', 'communication', 'literature', 'history', 'ethics', 'rizal',
-    'science', 'society', 'understanding the self', 'contemporary world', 'sports', 'wellness'];
-  
-  if (geKeywords.some(kw => text.includes(kw))) return 'GE';
-  
-  return 'Major'; // Default
-}
+  if (category && category !== officialCategory) {
+    throw new Error(`Subject code "${resolvedSubject.code}" belongs to category "${officialCategory}", not "${context.category}".`);
+  }
+  if (specialization && specialization !== officialSpecialization) {
+    throw new Error(`Subject code "${resolvedSubject.code}" belongs to specialization "${officialSpecialization}", not "${context.specialization}".`);
+  }
+  if (context.subject_description && normalizeText(context.subject_description) !== normalizeText(resolvedSubject.description)) {
+    throw new Error(`Subject code "${resolvedSubject.code}" does not match subject description "${context.subject_description}".`);
+  }
 
-/**
- * Infer specialization from description/topic keywords
- */
-function inferSpecialization(description: string, topic?: string): string {
-  const text = `${description} ${topic || ''}`.toLowerCase();
-  
-  // Major specializations
-  if (/information system|business process|enterprise|is project/.test(text)) return 'IS';
-  if (/computer science|object.oriented|operating system|theory of computation|artificial intelligence|software engineering/.test(text)) return 'CS';
-  if (/entertainment|multimedia|digital media|game development|animation/.test(text)) return 'EMC';
-  if (/computing|programming|data structure|web|database|network|security/.test(text)) return 'IT';
-  
-  // GE specializations
-  if (/math|calculus|algebra|statistics|probability|linear/.test(text)) return 'Math';
-  if (/physical|fitness|wellness|sports|rhythmic/.test(text)) return 'P.E.';
-  if (/english|purposive|communication|technical writing|literature/.test(text)) return 'English';
-  if (/filipino|kontekstuwalisado|pagbasa|masining/.test(text)) return 'Filipino';
-  if (/science|technology|contemporary/.test(text)) return 'Science';
-  if (/self|ethics|rizal|social/.test(text)) return 'Social Science';
-  
-  return 'IT'; // Default for Major
+  return {
+    academic_subject_id: resolvedSubject.id,
+    category: officialCategory,
+    specialization: officialSpecialization,
+    subject_code: resolvedSubject.code,
+    subject_description: resolvedSubject.description,
+  };
 }

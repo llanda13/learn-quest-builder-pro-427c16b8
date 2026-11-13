@@ -10,21 +10,40 @@ import {
   QuestionType, 
   getExamFormat, 
   getDefaultFormat,
+  getEssayPromptGroup,
   scaledFormatSections 
 } from "@/types/examFormats";
-import { generateQuestionsWithAI } from "./testGenerationService";
 import type { TOSCriteria } from "./testGenerationService";
 import { QuestionUniquenessStore, createQuestionFingerprint, extractConcept } from "./questionUniquenessChecker";
-import type { AnswerType, KnowledgeDimension } from "@/types/knowledge";
-import { resolveSubjectMetadata } from "./subjectMetadataResolver";
+import { normalizeKnowledgeDimension, type AnswerType, type KnowledgeDimension } from "@/types/knowledge";
+import {
+  resolveGeneratedQuestionSubject,
+  resolveSubjectMetadata,
+} from "./subjectMetadataResolver";
 import { shuffleExamChoices } from "@/utils/shuffleExamChoices";
 import { assertTosLink } from "@/services/db/tosLink";
+import { getDifficultyForBloom, type BloomLevel } from "@/utils/tosCalculator";
 
 export interface FormatAwareTestConfig {
   format: ExamFormat;
   tosCriteria: TOSCriteria[];
   testTitle: string;
-  testMetadata?: any;
+  testMetadata?: {
+    subject?: string;
+    subject_no?: string;
+    subject_code?: string;
+    academic_subject_id?: string;
+    description?: string;
+    subject_description?: string;
+    category?: string;
+    specialization?: string;
+    course?: string;
+    year_section?: string;
+    exam_period?: string;
+    school_year?: string;
+    semester?: string;
+    tos_id?: string;
+  };
 }
 
 export interface SectionedQuestion {
@@ -33,6 +52,7 @@ export interface SectionedQuestion {
   section_id: string;
   section_label: string;
   section_title: string;
+  section_instruction?: string;
   question_text: string;
   question_type: QuestionType;
   choices?: Record<string, string> | string[];
@@ -41,9 +61,14 @@ export interface SectionedQuestion {
   topic: string;
   bloom_level: string;
   difficulty: string;
+  knowledge_dimension?: string;
+  essay_prompt_group_id?: string;
+  essay_prompt_number?: number;
+  essay_prompt_start_number?: number;
+  essay_prompt_end_number?: number;
 }
 
-interface GenerationSlot {
+export interface GenerationSlot {
   item_number: number;
   topic: string;
   bloom_level: string;
@@ -54,6 +79,23 @@ interface GenerationSlot {
   section_label?: string;
   section_title?: string;
   points_per_question?: number;
+  essay_prompt_group_id?: string;
+  essay_prompt_number?: number;
+  essay_prompt_start_number?: number;
+  essay_prompt_end_number?: number;
+}
+
+export interface QuestionCandidate {
+  id?: string;
+  question_text?: string;
+  question_type?: string;
+  choices?: unknown;
+  correct_answer?: unknown;
+  topic?: string;
+  bloom_level?: string;
+  difficulty?: string;
+  knowledge_dimension?: string;
+  metadata?: unknown;
 }
 
 function normalizeQuestionType(type?: string): QuestionType {
@@ -61,147 +103,9 @@ function normalizeQuestionType(type?: string): QuestionType {
   const normalized = type.toLowerCase().replace(/[^a-z0-9]+/g, '_');
   if (['mcq', 'multiple_choice', 'multiple-choice', 'multiple choice'].includes(normalized)) return 'mcq';
   if (['true_false', 'true-false', 'true false', 'truefalse', 'true/false'].includes(normalized)) return 'true_false';
-  if (['fill_blank', 'fill-in-the-blank', 'fill blank', 'fill_in_blank'].includes(normalized)) return 'fill_blank';
+  if (['fill_blank', 'fill_in_the_blank', 'fill_in_blank', 'short_answer', 'identification'].includes(normalized)) return 'fill_blank';
+  if (['essay', 'long_answer', 'constructed_response'].includes(normalized)) return 'essay';
   return 'essay';
-}
-
-function requiresChoices(questionType?: string): boolean {
-  return normalizeQuestionType(questionType) === 'mcq';
-}
-
-function hasUsableChoices(question: any): boolean {
-  const choices = question?.choices ?? question?.options;
-  if (!choices) return false;
-  if (Array.isArray(choices)) {
-    return choices.filter((c: any) => String(c ?? '').trim().length > 0).length >= 2;
-  }
-  if (typeof choices === 'object') {
-    return Object.values(choices).filter((c: any) => String(c ?? '').trim().length > 0).length >= 2;
-  }
-  return false;
-}
-
-export function normalizeQuestionText(text: string): string {
-  return String(text || '')
-    .toLowerCase()
-    .replace(/[^a-z0-9\s]/g, ' ')
-    .replace(/\s+/g, ' ')
-    .trim();
-}
-
-/**
- * Resolve the correct answer as TEXT so that reordered answer choices do not
- * change a question's identity (a choice letter is meaningless on its own).
- */
-function resolveCorrectAnswerText(question: any): string {
-  const answer = String(question?.correct_answer ?? '').trim();
-  const choices = question?.choices;
-  if (choices && typeof choices === 'object' && !Array.isArray(choices)) {
-    const keyed = (choices as Record<string, string>)[answer.toUpperCase()];
-    if (keyed != null) return normalizeQuestionText(keyed);
-  }
-  if (Array.isArray(choices)) {
-    const index = answer.toUpperCase().charCodeAt(0) - 65;
-    if (answer.length === 1 && index >= 0 && index < choices.length) {
-      return normalizeQuestionText(String(choices[index]));
-    }
-  }
-  return normalizeQuestionText(answer);
-}
-
-export interface AcceptedQuestionRecord {
-  text: string;
-  normalizedText: string;
-  concept: string;
-  normalizedAnswer: string;
-  topic: string;
-}
-
-/**
- * Exam-wide duplicate tracker (BUG 1 FIX).
- * Compares every candidate against ALL previously accepted questions in the
- * entire exam — across topics, batches, and sources — using:
- *  1. normalized stem equality (capitalization, punctuation, whitespace),
- *  2. semantic stem similarity (existing 0.7 threshold),
- *  3. concept + expected-answer equality (reordered choices don't matter),
- *  4. structural fingerprint (topic + concept + answer type).
- */
-export class ExamDeduplicationTracker {
-  private accepted: AcceptedQuestionRecord[] = [];
-  private normalizedTexts = new Set<string>();
-  private fingerprintStore = new QuestionUniquenessStore();
-
-  private buildFingerprint(question: any, text: string) {
-    const bloomLevel = question?.bloom_level || 'Understanding';
-    return createQuestionFingerprint(
-      text,
-      question?.topic || '',
-      mapBloomToAnswerType(bloomLevel) as AnswerType,
-      bloomLevel,
-      (question?.knowledge_dimension || 'conceptual') as KnowledgeDimension
-    );
-  }
-
-  check(question: any): { duplicate: boolean; reason?: string } {
-    const text = String(question?.question_text || question?.text || '');
-    const normalizedText = normalizeQuestionText(text);
-    if (!normalizedText) {
-      return { duplicate: true, reason: 'empty question stem' };
-    }
-    if (this.normalizedTexts.has(normalizedText)) {
-      return {
-        duplicate: true,
-        reason: 'identical stem already accepted (ignoring capitalization, punctuation, and whitespace)'
-      };
-    }
-    if (this.accepted.length > 0 && isDuplicateByText(text, this.accepted.map((a) => a.text))) {
-      return { duplicate: true, reason: 'semantically similar stem already accepted in this exam' };
-    }
-    const concept = extractConcept(text);
-    const normalizedAnswer = resolveCorrectAnswerText(question);
-    if (concept && normalizedAnswer) {
-      for (const prior of this.accepted) {
-        if (prior.concept === concept && prior.normalizedAnswer === normalizedAnswer) {
-          return {
-            duplicate: true,
-            reason: `same concept and expected answer as an accepted question ("${concept}")`
-          };
-        }
-      }
-    }
-    const uniqueness = this.fingerprintStore.checkWithSuggestions(this.buildFingerprint(question, text));
-    if (!uniqueness.unique) {
-      return { duplicate: true, reason: uniqueness.reason };
-    }
-    return { duplicate: false };
-  }
-
-  register(question: any): void {
-    const text = String(question?.question_text || question?.text || '');
-    const normalizedText = normalizeQuestionText(text);
-    if (!normalizedText || this.normalizedTexts.has(normalizedText)) return;
-    this.accepted.push({
-      text,
-      normalizedText,
-      concept: extractConcept(text),
-      normalizedAnswer: resolveCorrectAnswerText(question),
-      topic: String(question?.topic || '').toLowerCase().trim()
-    });
-    this.normalizedTexts.add(normalizedText);
-    this.fingerprintStore.register(this.buildFingerprint(question, text));
-  }
-
-  getAcceptedStems(): string[] {
-    return this.accepted.map((a) => a.text);
-  }
-
-  get acceptedCount(): number {
-    return this.accepted.length;
-  }
-}
-
-export function createExamDeduplicationTracker(): ExamDeduplicationTracker {
-  return new ExamDeduplicationTracker();
 }
 
 function mapQuestionTypeToDbQuestionTypes(type?: string): string[] {
@@ -212,7 +116,7 @@ function mapQuestionTypeToDbQuestionTypes(type?: string): string[] {
     case 'true_false':
       return ['true_false', 'true-false', 'true false', 'truefalse', 'true/false'];
     case 'fill_blank':
-      return ['fill_blank', 'fill-in-the-blank', 'fill blank', 'fill_in_blank'];
+      return ['fill_blank', 'fill-in-the-blank', 'fill blank', 'fill_in_blank', 'short_answer', 'identification'];
     case 'essay':
       return ['essay', 'long_answer', 'constructed_response'];
     default:
@@ -220,7 +124,7 @@ function mapQuestionTypeToDbQuestionTypes(type?: string): string[] {
   }
 }
 
-function buildGenerationPlanFromTOSCriteria(tosCriteria: TOSCriteria[]): GenerationSlot[] {
+export function buildGenerationPlanFromTOSCriteria(tosCriteria: TOSCriteria[]): GenerationSlot[] {
   const slots: GenerationSlot[] = [];
   const seenItems = new Set<number>();
 
@@ -286,30 +190,319 @@ export function assignSlotsToSections(slots: GenerationSlot[], sections: ExamSec
       );
     }
 
-    const normalizedSlotType = normalizeQuestionType(slot.question_type);
     const normalizedSectionType = normalizeQuestionType(section.questionType);
-
-    if (slot.question_type && normalizedSlotType !== normalizedSectionType) {
-      console.warn(
-        `TOS slot ${slot.item_number} requests "${slot.question_type}" but section ${section.label} of the selected exam format is "${section.questionType}". The selected exam format is the source of truth — enforcing "${section.questionType}".`
-      );
-    }
+    const essayPromptGroup = getEssayPromptGroup(section, slot.item_number);
 
     return {
       ...slot,
       section_id: section.id,
       section_label: section.label,
       section_title: section.title,
-      points_per_question: section.pointsPerQuestion,
+      points_per_question: essayPromptGroup
+        ? section.pointsPerQuestion / (essayPromptGroup.endNumber - essayPromptGroup.startNumber + 1)
+        : section.pointsPerQuestion,
+      essay_prompt_group_id: essayPromptGroup?.id,
+      essay_prompt_number: essayPromptGroup?.number,
+      essay_prompt_start_number: essayPromptGroup?.startNumber,
+      essay_prompt_end_number: essayPromptGroup?.endNumber,
       question_type: normalizedSectionType
     };
   });
 }
 
-function validateGeneratedPlanQuestions(plan: GenerationSlot[], questions: SectionedQuestion[]): void {
+const QUESTION_STOP_WORDS = new Set([
+  'a', 'an', 'and', 'are', 'as', 'at', 'be', 'based', 'by', 'can', 'does',
+  'for', 'from', 'given', 'how', 'in', 'into', 'is', 'it', 'must', 'needs',
+  'of', 'on', 'or', 'result', 'should', 'that', 'the', 'their', 'this', 'to',
+  'using', 'was', 'what', 'when', 'which', 'who', 'why', 'with'
+]);
+
+const QUESTION_SYNONYMS: Record<string, string> = {
+  average: 'mean',
+  calculate: 'compute',
+  chief: 'main',
+  choose: 'select',
+  chosen: 'select',
+  computes: 'compute',
+  calculating: 'compute',
+  calculates: 'compute',
+  determine: 'compute',
+  determines: 'compute',
+  find: 'compute',
+  function: 'purpose',
+  functions: 'purpose',
+  mean: 'mean',
+  median: 'median',
+  major: 'main',
+  main: 'main',
+  method: 'approach',
+  methods: 'approach',
+  objective: 'purpose',
+  objectives: 'purpose',
+  primary: 'main',
+  role: 'purpose',
+  roles: 'purpose',
+  serves: 'purpose',
+  score: 'value',
+  scores: 'value',
+  task: 'purpose',
+  tasks: 'purpose',
+  value: 'value',
+  values: 'value'
+};
+
+function normalizedWords(text: string): string[] {
+  return text
+    .normalize('NFKD')
+    .replace(/[\u0300-\u036f]/g, '')
+    .toLowerCase()
+    .replace(/[^a-z0-9]+/g, ' ')
+    .trim()
+    .split(/\s+/)
+    .filter((word) => word.length > 1 && !QUESTION_STOP_WORDS.has(word))
+    .map((word) => QUESTION_SYNONYMS[word] || word);
+}
+
+function normalizeQuestionText(text: string): string {
+  return normalizedWords(text).join(' ');
+}
+
+function tokenSimilarity(left: string, right: string): number {
+  const leftTokens = new Set(normalizedWords(left));
+  const rightTokens = new Set(normalizedWords(right));
+  if (leftTokens.size === 0 || rightTokens.size === 0) return 0;
+  const intersection = [...leftTokens].filter((token) => rightTokens.has(token)).length;
+  return intersection / (leftTokens.size + rightTokens.size - intersection);
+}
+
+function objectiveText(text: string): string {
+  const sentences = text.split(/[.!?]+\s*/).filter(Boolean);
+  return sentences.length > 1 ? sentences[sentences.length - 1] : text;
+}
+
+function correctAnswerContent(question: QuestionCandidate): string {
+  const answer = question.correct_answer;
+  if (typeof answer !== 'string' || !answer.trim()) return '';
+  const choices = question.choices;
+  const letter = answer.trim().toUpperCase();
+  if (Array.isArray(choices)) {
+    const index = ['A', 'B', 'C', 'D'][['A', 'B', 'C', 'D'].indexOf(letter)];
+    if (index) {
+      const choice = choices[['A', 'B', 'C', 'D'].indexOf(letter)];
+      if (choice != null) return String(choice);
+    }
+  } else if (choices && typeof choices === 'object') {
+    const choice = (choices as Record<string, unknown>)[letter] ?? (choices as Record<string, unknown>)[letter.toLowerCase()];
+    if (choice != null) return String(choice);
+  }
+  return answer;
+}
+
+function getObjectiveAnchors(text: string): Set<string> {
+  const lowerText = text.toLowerCase();
+  const normalized = normalizeQuestionText(text);
+  const anchors = new Set<string>();
+
+  if (
+    /\b(?:ram|random access memory)\b/.test(lowerText) &&
+    /\b(?:volatile|working memory|temporary|temporarily)\b/.test(lowerText) &&
+    /\b(?:cpu|processor|instructions?|data)\b/.test(lowerText)
+  ) {
+    anchors.add('volatile-working-memory-role');
+  }
+
+  if (
+    /\bnorthbridge\b/.test(lowerText) &&
+    /\bsouthbridge\b/.test(lowerText) &&
+    /\b(?:function\w*|role\w*|manag\w*|handl\w*|differ\w*|data flow)\b/.test(lowerText)
+  ) {
+    anchors.add('northbridge-southbridge-roles');
+  }
+
+  if (
+    /\boptical\b/.test(normalized) &&
+    /\b(?:mouse|mice|input device|input devices)\b/.test(normalized) &&
+    /\b(?:surface|movement|track|tracking|coordinate)\b/.test(normalized)
+  ) {
+    anchors.add('optical-mouse-surface-tracking');
+  }
+
+  if (
+    /\boutput devices?\b/.test(lowerText) &&
+    /\b(?:visual|projector|project\w*|monitor|display)\b/.test(lowerText) &&
+    (/\b(?:identif\w*|describ\w*)\b/.test(lowerText) || /\bwhich\s+(?:output\s+)?(?:term|device|class|type)\b/.test(lowerText))
+  ) {
+    anchors.add('visual-output-device-identification');
+  }
+
+  if (
+    /\b(?:medical|diagnostic|dicom)\b/.test(normalized) &&
+    /\b(?:output device|output devices|printer|printing)\b/.test(normalized) &&
+    /\b(?:continuous tone|grayscale|gray scale)\b/.test(normalized) &&
+    /\b(?:archival|permanence|permanent|stability)\b/.test(normalized) &&
+    /\b(?:which device|most appropriate|evaluate|evaluating|select)\b/.test(normalized)
+  ) {
+    anchors.add('medical-imaging-output-selection');
+  }
+
+  return anchors;
+}
+
+export function getQuestionDuplicateReason(
+  candidate: QuestionCandidate,
+  existing: QuestionCandidate
+): string | undefined {
+  if (candidate.id && existing.id && candidate.id === existing.id) return undefined;
+
+  const candidateText = String(candidate.question_text || '').trim();
+  const existingText = String(existing.question_text || '').trim();
+  if (!candidateText || !existingText) return undefined;
+
+  const candidateNormalized = normalizeQuestionText(candidateText);
+  const existingNormalized = normalizeQuestionText(existingText);
+  if (candidateNormalized && candidateNormalized === existingNormalized) {
+    return 'Exact duplicate question text after normalization.';
+  }
+
+  const stemSimilarity = tokenSimilarity(candidateText, existingText);
+  if (stemSimilarity >= 0.68) {
+    return `Near-duplicate wording (content-token similarity ${stemSimilarity.toFixed(2)}).`;
+  }
+  const objectiveSimilarity = Math.max(
+    stemSimilarity,
+    tokenSimilarity(objectiveText(candidateText), objectiveText(existingText))
+  );
+
+  const candidateAnswer = correctAnswerContent(candidate);
+  const existingAnswer = correctAnswerContent(existing);
+  const answerSimilarity = candidateAnswer && existingAnswer
+    ? tokenSimilarity(candidateAnswer, existingAnswer) || (normalizeQuestionText(candidateAnswer) === normalizeQuestionText(existingAnswer) ? 1 : 0)
+    : 0;
+  const topicSimilarity = tokenSimilarity(candidate.topic || '', existing.topic || '');
+  const candidateAnchors = getObjectiveAnchors(`${candidateText} ${candidateAnswer}`);
+  const existingAnchors = getObjectiveAnchors(`${existingText} ${existingAnswer}`);
+  const sharedAnchors = [...candidateAnchors].filter((anchor) => existingAnchors.has(anchor));
+
+  if (
+    answerSimilarity >= 0.75 &&
+    objectiveSimilarity >= 0.65 &&
+    topicSimilarity >= 0.5
+  ) {
+    return `Substantially similar objective and expected answer (objective ${objectiveSimilarity.toFixed(2)}, answer ${answerSimilarity.toFixed(2)}).`;
+  }
+
+  if (sharedAnchors.length > 0) {
+    return `Substantially similar learning objective (${sharedAnchors.join(', ')}).`;
+  }
+
+  return undefined;
+}
+
+export function validateQuestionForType(
+  question: QuestionCandidate,
+  expectedType: QuestionType
+): string[] {
+  const errors: string[] = [];
+  const actualType = normalizeQuestionType(question.question_type);
+  if (actualType !== expectedType) {
+    errors.push(`question type must be "${expectedType}", got "${question.question_type || 'missing'}".`);
+  }
+  if (!String(question.question_text || '').trim()) errors.push('question text is missing.');
+
+  if (expectedType === 'mcq') {
+    const choices = question.choices;
+    let values: string[] = [];
+    if (Array.isArray(choices)) {
+      values = choices.map((value) => String(value ?? '').trim());
+    } else if (choices && typeof choices === 'object') {
+      const choiceRecord = choices as Record<string, unknown>;
+      const keys = Object.keys(choiceRecord).map((key) => key.toUpperCase()).sort();
+      if (keys.length !== 4 || keys.join(',') !== 'A,B,C,D') {
+        errors.push('MCQ must contain exactly options A, B, C, and D.');
+      }
+      values = ['A', 'B', 'C', 'D'].map((key) =>
+        String(choiceRecord[key] ?? choiceRecord[key.toLowerCase()] ?? '').trim()
+      );
+    }
+    if (values.length !== 4 || values.some((value) => !value)) {
+      if (!errors.some((error) => error.startsWith('MCQ must contain'))) {
+        errors.push('MCQ must contain exactly four non-empty options A, B, C, and D.');
+      }
+    }
+    if (new Set(values.map(normalizeQuestionText)).size !== values.length) {
+      errors.push('MCQ options must be distinct.');
+    }
+
+    const answer = question.correct_answer;
+    if (typeof answer !== 'string' || !answer.trim()) {
+      errors.push('MCQ must have exactly one correct answer.');
+    } else {
+      const normalizedAnswer = answer.trim().toUpperCase();
+      const answerMatches = /^[A-D]$/.test(normalizedAnswer)
+        ? 1
+        : values.filter((value) => normalizeQuestionText(value) === normalizeQuestionText(answer)).length;
+      if (answerMatches !== 1) errors.push('MCQ correct answer must identify exactly one of options A-D.');
+    }
+  } else if (expectedType === 'true_false') {
+    const choices = question.choices;
+    let values: string[] = [];
+    if (Array.isArray(choices)) {
+      values = choices.map((value) => String(value ?? '').trim().toLowerCase());
+    } else if (choices && typeof choices === 'object') {
+      const normalizedChoices = choices as Record<string, unknown>;
+      const keys = Object.keys(normalizedChoices).map((key) => key.toUpperCase()).sort();
+      values = ['A', 'B'].map((key) =>
+        String(normalizedChoices[key] ?? normalizedChoices[key.toLowerCase()] ?? '').trim().toLowerCase()
+      );
+      if (keys.length !== 2 || keys.join(',') !== 'A,B') values = [];
+    }
+    if (values.length !== 2 || values[0] !== 'true' || values[1] !== 'false') {
+      errors.push('True/False questions must contain exactly the True and False options.');
+    }
+    const rawAnswer = String(question.correct_answer || '').trim().toLowerCase();
+    const normalizedAnswer = rawAnswer === 'a' ? values[0] : rawAnswer === 'b' ? values[1] : rawAnswer;
+    if (!['true', 'false'].includes(normalizedAnswer)) {
+      errors.push('True/False correct answer must be exactly True or False.');
+    }
+  } else if (!String(question.correct_answer || '').trim()) {
+    errors.push(`${expectedType} question is missing its correct answer or rubric.`);
+  }
+
+  const metadata = question.metadata;
+  if (metadata && typeof metadata === 'object' && 'structure_validated' in metadata) {
+    const validation = metadata as { structure_validated?: boolean; rejection_reasons?: string[] };
+    if (validation.structure_validated === false) {
+      errors.push(`AI Bloom/answer-structure validation failed: ${(validation.rejection_reasons || []).join(' ')}`);
+    }
+  }
+
+  return errors;
+}
+
+export function buildSlotRegenerationContext(
+  slot: GenerationSlot,
+  rejected: Array<{ question: string; reason: string }>
+) {
+  return {
+    question_number: slot.item_number,
+    question_type: normalizeQuestionType(slot.question_type),
+    topic: slot.topic,
+    bloom_level: slot.bloom_level,
+    difficulty: slot.difficulty,
+    knowledge_dimension: normalizeKnowledgeDimension(slot.knowledge_dimension),
+    essay_prompt_group_id: slot.essay_prompt_group_id,
+    essay_prompt_number: slot.essay_prompt_number,
+    essay_prompt_start_number: slot.essay_prompt_start_number,
+    essay_prompt_end_number: slot.essay_prompt_end_number,
+    rejected_questions: rejected
+  };
+}
+
+export function validateGeneratedPlanQuestions(plan: GenerationSlot[], questions: SectionedQuestion[]): void {
   const errors: string[] = [];
   const expectedTopicCounts = new Map<string, number>();
   const expectedBloomCounts = new Map<string, number>();
+  const seenNumbers = new Set<number>();
 
   plan.forEach((slot) => {
     expectedTopicCounts.set(slot.topic, (expectedTopicCounts.get(slot.topic) || 0) + 1);
@@ -333,6 +526,10 @@ function validateGeneratedPlanQuestions(plan: GenerationSlot[], questions: Secti
     if (question.question_number !== slot.item_number) {
       errors.push(`Slot ${slot.item_number} stored question_number ${question.question_number}.`);
     }
+    if (seenNumbers.has(question.question_number)) {
+      errors.push(`Question number ${question.question_number} is repeated.`);
+    }
+    seenNumbers.add(question.question_number);
     if (question.topic !== slot.topic) {
       errors.push(`Slot ${slot.item_number} topic mismatch: expected "${slot.topic}", got "${question.topic}".`);
     }
@@ -345,12 +542,16 @@ function validateGeneratedPlanQuestions(plan: GenerationSlot[], questions: Secti
     if (normalizeQuestionType(question.question_type) !== normalizeQuestionType(slot.question_type)) {
       errors.push(`Slot ${slot.item_number} question type mismatch: expected "${slot.question_type}", got "${question.question_type}".`);
     }
-    if (question.section_id !== slot.section_id) {
+    if (slot.section_id && question.section_id !== slot.section_id) {
       errors.push(`Slot ${slot.item_number} section mismatch: expected "${slot.section_id}", got "${question.section_id}".`);
     }
-    if (slot.question_type === 'mcq' && !hasUsableChoices(question)) {
-      errors.push(`Slot ${slot.item_number} is multiple choice but has no answer choices.`);
+    if (slot.knowledge_dimension && question.knowledge_dimension?.toLowerCase() !== slot.knowledge_dimension.toLowerCase()) {
+      errors.push(`Slot ${slot.item_number} knowledge dimension mismatch: expected "${slot.knowledge_dimension}", got "${question.knowledge_dimension}".`);
     }
+
+    validateQuestionForType(question, normalizeQuestionType(slot.question_type)).forEach((reason) => {
+      errors.push(`Question ${slot.item_number}: ${reason}`);
+    });
 
     actualTopicCounts.set(question.topic, (actualTopicCounts.get(question.topic) || 0) + 1);
     actualBloomCounts.set(question.bloom_level, (actualBloomCounts.get(question.bloom_level) || 0) + 1);
@@ -367,9 +568,369 @@ function validateGeneratedPlanQuestions(plan: GenerationSlot[], questions: Secti
     }
   }
 
+  for (let index = 0; index < questions.length; index += 1) {
+    for (let otherIndex = index + 1; otherIndex < questions.length; otherIndex += 1) {
+      const reason = getQuestionDuplicateReason(questions[index], questions[otherIndex]);
+      if (reason) {
+        errors.push(`Questions ${questions[index].question_number} and ${questions[otherIndex].question_number} are duplicates: ${reason}`);
+      }
+    }
+  }
+
   if (errors.length > 0) {
     throw new Error(`Format-aware TOS validation failed: ${errors.join(' ')}`);
   }
+}
+
+export function validateAnswerKey(
+  questions: SectionedQuestion[],
+  answerKey: Array<{ question_number?: number; question_id?: string; correct_answer?: string }>
+): void {
+  const errors: string[] = [];
+  if (answerKey.length !== questions.length) {
+    errors.push(`Expected ${questions.length} answer-key entries, got ${answerKey.length}.`);
+  }
+  questions.forEach((question) => {
+    const entries = answerKey.filter((entry) => entry.question_number === question.question_number);
+    if (entries.length !== 1) {
+      errors.push(`Question ${question.question_number} must have exactly one answer-key entry.`);
+      return;
+    }
+    if (entries[0].question_id !== question.id || entries[0].correct_answer !== question.correct_answer) {
+      errors.push(`Answer-key entry for question ${question.question_number} does not match the final question.`);
+    }
+  });
+  if (errors.length > 0) throw new Error(`Answer-key validation failed: ${errors.join(' ')}`);
+}
+
+export function buildRepairCriteriaFromTOS(tos: {
+  total_items?: number;
+  distribution?: Record<string, any>;
+  matrix?: Record<string, any>;
+}): TOSCriteria[] {
+  const distribution = tos.distribution || tos.matrix;
+  if (!distribution || Array.isArray(distribution) || typeof distribution !== 'object') {
+    throw new Error('The saved TOS does not contain slot-level distribution metadata required for safe repair.');
+  }
+
+  const criteria: TOSCriteria[] = [];
+  const bloomLevels: BloomLevel[] = [
+    'remembering', 'understanding', 'applying', 'analyzing', 'evaluating', 'creating'
+  ];
+  for (const [topic, topicData] of Object.entries(distribution)) {
+    if (!topicData || typeof topicData !== 'object') continue;
+    for (const bloom of bloomLevels) {
+      const cell = (topicData as Record<string, any>)[bloom];
+      if (!cell || !Array.isArray(cell.items)) {
+        if (Number(cell?.count || 0) > 0) {
+          throw new Error(`Saved TOS slot numbers are missing for ${topic} / ${bloom}.`);
+        }
+        continue;
+      }
+      if (cell.items.length === 0) continue;
+
+      const knowledgeDimension = bloom === 'remembering' ? 'Factual'
+        : bloom === 'applying' ? 'Procedural'
+        : bloom === 'creating' || bloom === 'evaluating' ? 'Metacognitive'
+        : 'Conceptual';
+      criteria.push({
+        topic,
+        bloom_level: bloom,
+        knowledge_dimension: knowledgeDimension,
+        difficulty: getDifficultyForBloom(bloom),
+        count: cell.items.length,
+        item_numbers: [...cell.items]
+      });
+    }
+  }
+
+  const slotCount = criteria.reduce((sum, criterion) => sum + criterion.count, 0);
+  if (!slotCount || (tos.total_items != null && slotCount !== tos.total_items)) {
+    throw new Error(
+      `Saved TOS slot metadata is incomplete: expected ${tos.total_items ?? 'a positive number of'} items, found ${slotCount}.`
+    );
+  }
+  return criteria;
+}
+
+export interface FormatAwareRepairTest {
+  id: string;
+  format_id?: string | null;
+  tos_id?: string | null;
+  items?: unknown;
+  answer_key?: unknown;
+}
+
+export async function repairFormatAwareTest(test: FormatAwareRepairTest): Promise<{
+  repaired: boolean;
+  items: SectionedQuestion[];
+  answer_key: Array<Record<string, unknown>>;
+  replacedQuestionNumbers: number[];
+}> {
+  if (!test.tos_id) {
+    throw new Error(`Cannot safely repair examination ${test.id}: it is not linked to its original TOS.`);
+  }
+
+  const { data: tos, error: tosError } = await supabase
+    .from('tos_entries')
+    .select('total_items, distribution, matrix')
+    .eq('id', test.tos_id)
+    .single();
+  if (tosError) {
+    throw new Error(`Cannot repair examination ${test.id}: unable to retrieve its original TOS: ${tosError.message}`);
+  }
+  if (!tos) {
+    throw new Error(`Cannot repair examination ${test.id}: its original TOS was not found.`);
+  }
+
+  const sourceItems = Array.isArray(test.items) ? test.items as Record<string, any>[] : [];
+  if (!test.format_id) {
+    if (sourceItems.length >= Number(tos.total_items || 0)) {
+      return {
+        repaired: false,
+        items: sourceItems as SectionedQuestion[],
+        answer_key: Array.isArray(test.answer_key) ? test.answer_key as Array<Record<string, unknown>> : [],
+        replacedQuestionNumbers: []
+      };
+    }
+    throw new Error(
+      `Cannot safely repair examination ${test.id}: it has no saved format_id. Recreate it with a selected format first.`
+    );
+  }
+  const format = getExamFormat(test.format_id);
+  if (!format) {
+    throw new Error(`Cannot repair examination ${test.id}: unsupported saved format "${test.format_id}".`);
+  }
+
+  const criteria = buildRepairCriteriaFromTOS(tos as any);
+  const plan = buildGenerationPlanFromTOSCriteria(criteria);
+  if (plan.length !== tos.total_items) {
+    throw new Error(`Cannot repair examination ${test.id}: its TOS item count does not match the saved slot plan.`);
+  }
+  const sections = scaledFormatSections(format, plan.length);
+  const sectionedPlan = assignSlotsToSections(plan, sections);
+  const sectionById = new Map(sections.map((section) => [section.id, section]));
+
+  const topicNames = [...new Set(sectionedPlan.map((slot) => slot.topic))];
+  let bankQuestions: QuestionCandidate[] | undefined;
+  const getRepairBankQuestions = async () => {
+    if (bankQuestions) return bankQuestions;
+    bankQuestions = [];
+    for (let offset = 0; ; offset += 500) {
+      const { data, error } = await supabase
+        .from('questions')
+        .select('id, question_text, question_type, choices, correct_answer, topic, bloom_level, difficulty, knowledge_dimension')
+        .eq('deleted', false)
+        .eq('approved', true)
+        .in('topic', topicNames)
+        .range(offset, offset + 499);
+      if (error) {
+        bankQuestions = undefined;
+        throw new Error(`Unable to check the question bank during repair: ${error.message}`);
+      }
+      bankQuestions.push(...(data || []));
+      if (!data || data.length < 500) break;
+    }
+    return bankQuestions;
+  };
+
+  const itemsByNumber = new Map<number, Record<string, any>>();
+  sourceItems.forEach((item, index) => {
+    const number = Number.isInteger(item.question_number) ? item.question_number : index + 1;
+    if (!itemsByNumber.has(number)) itemsByNumber.set(number, item);
+  });
+
+  const repairedItems: SectionedQuestion[] = new Array(plan.length);
+  const replacedQuestionNumbers: number[] = [];
+  const rejectionReasons = new Map<number, Array<{ question: string; reason: string }>>();
+  const { data: { user } } = await supabase.auth.getUser();
+  if (!user) throw new Error('Cannot repair examination: user is not authenticated.');
+  const repairDuplicateReason = (candidate: QuestionCandidate, existing: QuestionCandidate) => {
+    if (candidate.id && existing.id && candidate.id === existing.id) {
+      return 'The same question-bank record is already used by another examination slot.';
+    }
+    return getQuestionDuplicateReason(candidate, existing);
+  };
+
+  const slotErrors = (slot: GenerationSlot, item: Record<string, any> | undefined): string[] => {
+    if (!item) return ['Question is missing.'];
+    const errors = validateQuestionForType(item, normalizeQuestionType(slot.question_type));
+    if (item.question_number !== slot.item_number) errors.push('Question number does not match its TOS slot.');
+    if (item.topic !== slot.topic) errors.push('Topic does not match its TOS slot.');
+    if (item.bloom_level !== slot.bloom_level) errors.push("Bloom level does not match its TOS slot.");
+    if (String(item.difficulty || '').toLowerCase() !== slot.difficulty.toLowerCase()) {
+      errors.push('Difficulty does not match its TOS slot.');
+    }
+    if (slot.knowledge_dimension && String(item.knowledge_dimension || '').toLowerCase() !== slot.knowledge_dimension.toLowerCase()) {
+      errors.push('Knowledge dimension does not match its TOS slot.');
+    }
+    if (item.section_id !== slot.section_id) errors.push('Section does not match the saved examination format.');
+    return errors;
+  };
+
+  for (const slot of sectionedPlan) {
+    const original = itemsByNumber.get(slot.item_number);
+    const errors = slotErrors(slot, original);
+    const previous = repairedItems.filter(Boolean);
+    const duplicate = original && errors.length === 0
+      ? previous.map((item) => repairDuplicateReason(original, item)).find(Boolean)
+      : undefined;
+    if (duplicate) errors.push(duplicate);
+
+    if (original && errors.length === 0) {
+      repairedItems[slot.item_number - 1] = original as SectionedQuestion;
+      continue;
+    }
+
+    replacedQuestionNumbers.push(slot.item_number);
+    const rejected = rejectionReasons.get(slot.item_number) || [];
+    if (original) {
+      rejected.push({
+        question: String(original.question_text || ''),
+        reason: errors.join(' ')
+      });
+    }
+    rejectionReasons.set(slot.item_number, rejected);
+
+    const criterion = criteria.find((candidate) =>
+      candidate.topic === slot.topic &&
+      candidate.bloom_level === slot.bloom_level &&
+      candidate.difficulty === slot.difficulty &&
+      candidate.item_numbers?.includes(slot.item_number)
+    );
+    if (!criterion) {
+      throw new Error(`Cannot repair question ${slot.item_number}: no original TOS criterion was found.`);
+    }
+
+    const bankCandidates = await getRepairBankQuestions();
+    let accepted: QuestionCandidate | undefined;
+    for (const candidate of bankCandidates) {
+      if (
+        candidate.topic !== slot.topic ||
+        candidate.bloom_level !== slot.bloom_level ||
+        String(candidate.difficulty || '').toLowerCase() !== slot.difficulty.toLowerCase() ||
+        normalizeQuestionType(candidate.question_type) !== normalizeQuestionType(slot.question_type)
+      ) continue;
+      const typeErrors = validateQuestionForType(candidate, normalizeQuestionType(slot.question_type));
+      const duplicateReason = [
+        ...previous,
+        ...sourceItems.filter((item) => item.question_number !== slot.item_number),
+        ...bankCandidates.filter((item) => item.id !== candidate.id)
+      ]
+        .map((item) => repairDuplicateReason(candidate, item))
+        .find(Boolean);
+      if (typeErrors.length || duplicateReason) {
+        rejected.push({
+          question: String(candidate.question_text || ''),
+          reason: [...typeErrors, ...(duplicateReason ? [duplicateReason] : [])].join(' ')
+        });
+        continue;
+      }
+      accepted = candidate;
+      break;
+    }
+
+    const slotCriterion: TOSCriteria = {
+      ...criterion,
+      count: 1,
+      item_numbers: [slot.item_number],
+      question_type: normalizeQuestionType(slot.question_type)
+    };
+    for (let attempt = 1; attempt <= 3 && !accepted; attempt += 1) {
+      const [candidate] = await generateTypedQuestionsViaAI(
+        normalizeQuestionType(slot.question_type),
+        [slotCriterion],
+        1,
+        user.id,
+        { slot, rejected }
+      );
+      if (!candidate) {
+        rejected.push({ question: '', reason: `No question was returned on repair attempt ${attempt}.` });
+        continue;
+      }
+      const typeErrors = validateQuestionForType(candidate, normalizeQuestionType(slot.question_type));
+      const duplicateReason = [
+        ...previous,
+        ...sourceItems.filter((item) => item.question_number !== slot.item_number),
+        ...bankCandidates
+      ]
+        .map((item) => repairDuplicateReason(candidate, item))
+        .find(Boolean);
+      if (typeErrors.length || duplicateReason) {
+        rejected.push({
+          question: String(candidate.question_text || ''),
+          reason: [...typeErrors, ...(duplicateReason ? [duplicateReason] : [])].join(' ')
+        });
+        continue;
+      }
+      accepted = candidate;
+    }
+
+    if (!accepted) {
+      throw new Error(
+        `Unable to repair question ${slot.item_number} (${slot.topic}, ${slot.bloom_level}, ${slot.question_type}). ${rejected.map((entry) => entry.reason).filter(Boolean).join(' | ')}`
+      );
+    }
+
+    const section = sectionById.get(slot.section_id!);
+    repairedItems[slot.item_number - 1] = {
+      ...accepted,
+      id: accepted.id || `repair-${slot.item_number}-${Date.now()}`,
+      question_number: slot.item_number,
+      section_id: slot.section_id!,
+      section_label: slot.section_label!,
+      section_title: slot.section_title!,
+      section_instruction: section?.instruction,
+      essay_prompt_group_id: slot.essay_prompt_group_id,
+      essay_prompt_number: slot.essay_prompt_number,
+      essay_prompt_start_number: slot.essay_prompt_start_number,
+      essay_prompt_end_number: slot.essay_prompt_end_number,
+      question_type: normalizeQuestionType(slot.question_type),
+      points: slot.points_per_question ?? section?.pointsPerQuestion ?? 1,
+      topic: slot.topic,
+      bloom_level: slot.bloom_level,
+      difficulty: slot.difficulty,
+      knowledge_dimension: slot.knowledge_dimension
+    } as SectionedQuestion;
+  }
+
+  validateGeneratedPlanQuestions(sectionedPlan, repairedItems);
+  const answerKey = repairedItems.map((item) => ({
+    question_number: item.question_number,
+    question_id: item.id,
+    correct_answer: item.correct_answer,
+    section: item.section_label,
+    question_type: item.question_type,
+    points: item.points
+  }));
+  validateAnswerKey(repairedItems, answerKey);
+
+  const currentAnswerKey = Array.isArray(test.answer_key) ? test.answer_key : [];
+  const answerKeyIsCurrent = currentAnswerKey.length === answerKey.length &&
+    answerKey.every((entry: any, index: number) =>
+      entry.question_number === answerKey[index].question_number &&
+      entry.question_id === answerKey[index].question_id &&
+      entry.correct_answer === answerKey[index].correct_answer
+    );
+  const changedItems = replacedQuestionNumbers.length > 0 || sourceItems.length !== repairedItems.length;
+  if (!changedItems && answerKeyIsCurrent) {
+    return { repaired: false, items: repairedItems, answer_key: answerKey, replacedQuestionNumbers };
+  }
+
+  const { data: updated, error: updateError } = await supabase
+    .from('generated_tests')
+    .update({
+      items: repairedItems as any,
+      answer_key: answerKey,
+      format_id: format.id
+    })
+    .eq('id', test.id)
+    .select('id')
+    .single();
+  if (updateError || !updated) {
+    throw new Error(`Unable to save repaired examination ${test.id}: ${updateError?.message || 'No updated record was returned.'}`);
+  }
+  return { repaired: true, items: repairedItems, answer_key: answerKey, replacedQuestionNumbers };
 }
 
 export interface FormatAwareTestResult {
@@ -395,9 +956,14 @@ export interface FormatAwareTestResult {
 export async function generateFormatAwareTest(
   config: FormatAwareTestConfig
 ): Promise<FormatAwareTestResult> {
+  const selectedFormat = getExamFormat(config.format.id);
+  if (!selectedFormat) {
+    throw new Error(`Unsupported examination format "${config.format.id}".`);
+  }
+
   console.log("🧠 === STARTING FORMAT-AWARE TEST GENERATION ===");
-  console.log("📋 Format:", config.format.name);
-  console.log("📊 Sections:", config.format.sections.length);
+  console.log("📋 Format:", selectedFormat.name);
+  console.log("📊 Sections:", selectedFormat.sections.length);
 
   const { data: { user } } = await supabase.auth.getUser();
   if (!user) {
@@ -406,14 +972,34 @@ export async function generateFormatAwareTest(
 
   const generationPlan = buildGenerationPlanFromTOSCriteria(config.tosCriteria);
   const requiredTotal = generationPlan.length;
+  if (requiredTotal === 0) {
+    throw new Error('The TOS has no assigned item slots. Generate or correct the TOS before creating an examination.');
+  }
   console.log(`📊 TOS CONTRACT: ${requiredTotal} total questions required`);
 
-  const scaledSections = scaledFormatSections(config.format, requiredTotal);
+  const scaledSections = scaledFormatSections(selectedFormat, requiredTotal);
   console.log("📐 Scaled sections:", scaledSections.map(s =>
     `${s.label}: ${s.endNumber - s.startNumber + 1} ${s.questionType}`
   ));
 
   const sectionedSlots = assignSlotsToSections(generationPlan, scaledSections);
+  const topics = [...new Set(sectionedSlots.map((slot) => slot.topic))];
+  const bankQuestionsForDedup: QuestionCandidate[] = [];
+  const bankPageSize = 500;
+  for (let offset = 0; ; offset += bankPageSize) {
+    const { data, error } = await supabase
+      .from('questions')
+      .select('id, question_text, question_type, choices, correct_answer, topic, bloom_level, difficulty, knowledge_dimension')
+      .eq('deleted', false)
+      .eq('approved', true)
+      .in('topic', topics)
+      .range(offset, offset + bankPageSize - 1);
+    if (error) {
+      throw new Error(`Unable to check the question bank for duplicates: ${error.message}`);
+    }
+    bankQuestionsForDedup.push(...(data || []));
+    if (!data || data.length < bankPageSize) break;
+  }
 
   const sectionResults: FormatAwareTestResult['sections'] = scaledSections.map((section) => ({
     id: section.id,
@@ -425,9 +1011,6 @@ export async function generateFormatAwareTest(
   }));
 
   const allQuestions: SectionedQuestion[] = new Array(requiredTotal);
-  const answerKey: any[] = [];
-  const dedupTracker = createExamDeduplicationTracker();
-  const unfilledItemNumbers: number[] = [];
   const sectionMap = new Map(scaledSections.map((section) => [section.id, section]));
 
   for (const slot of sectionedSlots) {
@@ -456,15 +1039,22 @@ export async function generateFormatAwareTest(
     }
 
     const candidates = queryError ? [] : (existingCandidates || []);
-    let chosen: any = null;
+    let chosen: QuestionCandidate | null = null;
+    const rejected: Array<{ question: string; reason: string }> = [];
+    const alreadySelected = allQuestions.filter(Boolean);
+    const expectedType = normalizeQuestionType(slot.question_type);
 
     for (const candidate of candidates) {
-      if (requiresChoices(slot.question_type) && !hasUsableChoices(candidate)) {
+      const formatErrors = validateQuestionForType(candidate, expectedType);
+      if (formatErrors.length > 0) {
+        rejected.push({ question: String(candidate.question_text || ''), reason: formatErrors.join(' ') });
         continue;
       }
-      const dedupCheck = dedupTracker.check(candidate);
-      if (dedupCheck.duplicate) {
-        console.log(`   🔄 Skipping duplicate bank candidate for slot #${slot.item_number}: ${dedupCheck.reason}`);
+      const duplicate = alreadySelected
+        .map((question) => getQuestionDuplicateReason(candidate, question))
+        .find(Boolean);
+      if (duplicate) {
+        rejected.push({ question: String(candidate.question_text || ''), reason: duplicate });
         continue;
       }
       chosen = candidate;
@@ -472,54 +1062,79 @@ export async function generateFormatAwareTest(
     }
 
     if (!chosen) {
-      console.log(`   ⚠️ No unique bank candidate for slot #${slot.item_number}; generating AI content.`);
-      const MAX_SLOT_ATTEMPTS = 3;
-      for (let attempt = 1; attempt <= MAX_SLOT_ATTEMPTS && !chosen; attempt += 1) {
-        const generated = await generateQuestionsWithAI(
-          {
-            topic: slot.topic,
-            bloom_level: slot.bloom_level,
-            difficulty: slot.difficulty,
-            count: 1,
-            type: slot.question_type || 'mcq'
-          } as any,
-          1,
-          user.id,
-          { slotNumber: slot.item_number, existingStems: dedupTracker.getAcceptedStems() }
-        );
-        for (const generatedQuestion of generated) {
-          if (!generatedQuestion) continue;
-          if (normalizeQuestionType(generatedQuestion.question_type) !== slot.question_type) {
-            console.log(
-              `   🔄 Rejected AI question for slot #${slot.item_number}: expected type "${slot.question_type}", got "${generatedQuestion.question_type}"`
-            );
-            continue;
-          }
-          if (requiresChoices(slot.question_type) && !hasUsableChoices(generatedQuestion)) {
-            console.log(`   🔄 Rejected AI question for slot #${slot.item_number}: multiple choice without answer choices`);
-            continue;
-          }
-          const dedupCheck = dedupTracker.check(generatedQuestion);
-          if (dedupCheck.duplicate) {
-            console.log(`   🔄 Rejected duplicate AI question for slot #${slot.item_number} (attempt ${attempt}): ${dedupCheck.reason}`);
-            continue;
-          }
-          chosen = generatedQuestion;
-          break;
-        }
-      }
-    } else {
-      try {
-        await supabase.rpc('mark_question_used', { p_question_id: chosen.id, p_test_id: null });
-      } catch {
-        // ignore marking failures
-      }
-    }
+      console.log(`   ⚠️ No valid unique bank candidate for slot #${slot.item_number}; generating constrained replacement.`);
+      const criterion = config.tosCriteria.find((item) =>
+        item.topic === slot.topic && item.bloom_level === slot.bloom_level && item.difficulty === slot.difficulty
+      ) || config.tosCriteria.find((item) => item.topic === slot.topic)!;
+      const slotCriterion: TOSCriteria = {
+        ...criterion,
+        count: 1,
+        item_numbers: [slot.item_number],
+        question_type: expectedType
+      };
 
-    if (!chosen) {
-      console.warn(`   ⚠️ Slot #${slot.item_number} could not be filled with a unique question.`);
-      unfilledItemNumbers.push(slot.item_number);
-      continue;
+      for (let attempt = 1; attempt <= 3 && !chosen; attempt += 1) {
+        let generated: QuestionCandidate[] = [];
+        try {
+          generated = await generateTypedQuestionsViaAI(expectedType, [slotCriterion], 1, user.id, {
+            slot,
+            rejected
+          });
+        } catch (error) {
+          rejected.push({
+            question: '',
+            reason: error instanceof Error ? error.message : 'AI generation failed.'
+          });
+        }
+
+        const candidate = generated[0];
+        if (!candidate) {
+          rejected.push({ question: '', reason: `No question was returned on regeneration attempt ${attempt}.` });
+          continue;
+        }
+
+        const formatErrors = validateQuestionForType(candidate, expectedType);
+        const duplicateSources = [
+          ...alreadySelected,
+          ...bankQuestionsForDedup
+        ];
+        const duplicate = duplicateSources
+          .map((existing) => getQuestionDuplicateReason(candidate, existing))
+          .find(Boolean);
+        if (formatErrors.length > 0 || duplicate) {
+          rejected.push({
+            question: String(candidate.question_text || ''),
+            reason: [...formatErrors, ...(duplicate ? [duplicate] : [])].join(' ')
+          });
+          continue;
+        }
+        chosen = candidate;
+      }
+
+      if (!chosen) {
+        const reasons = rejected
+          .filter((entry) => entry.reason)
+          .map((entry) => entry.reason)
+          .join(' | ');
+        throw new Error(
+          `Unable to fill question ${slot.item_number} (${slot.topic}, ${slot.bloom_level}, ${expectedType}) after 3 attempts. ${reasons}`
+        );
+      }
+
+      const [savedQuestion] = await saveGeneratedQuestionsToBank(
+        [chosen],
+        user.id,
+        [slotCriterion],
+        config.testMetadata
+      );
+      chosen = savedQuestion || chosen;
+    } else if (chosen.id) {
+      try {
+        const { error } = await supabase.rpc('mark_question_used', { p_question_id: chosen.id, p_test_id: null });
+        if (error) console.warn(`Could not mark question ${chosen.id} as used: ${error.message}`);
+      } catch (error) {
+        console.warn(`Could not mark question ${chosen.id} as used:`, error);
+      }
     }
 
     const section = sectionMap.get(slot.section_id!);
@@ -530,24 +1145,20 @@ export async function generateFormatAwareTest(
       section_id: slot.section_id!,
       section_label: slot.section_label!,
       section_title: slot.section_title!,
-      question_type: slot.question_type || (section?.questionType ?? 'mcq'),
+      section_instruction: section?.instruction,
+      essay_prompt_group_id: slot.essay_prompt_group_id,
+      essay_prompt_number: slot.essay_prompt_number,
+      essay_prompt_start_number: slot.essay_prompt_start_number,
+      essay_prompt_end_number: slot.essay_prompt_end_number,
+      question_type: expectedType,
       points: slot.points_per_question ?? section?.pointsPerQuestion ?? 1,
       topic: slot.topic,
       bloom_level: slot.bloom_level,
-      difficulty: slot.difficulty
+      difficulty: slot.difficulty,
+      knowledge_dimension: slot.knowledge_dimension
     } as SectionedQuestion;
 
-    dedupTracker.register(question);
     allQuestions[slot.item_number - 1] = question;
-
-    answerKey.push({
-      question_number: question.question_number,
-      question_id: question.id,
-      correct_answer: question.correct_answer,
-      section: question.section_label,
-      question_type: question.question_type,
-      points: question.points
-    });
 
     const sectionResult = sectionResults.find((s) => s.id === slot.section_id);
     if (sectionResult) {
@@ -556,80 +1167,13 @@ export async function generateFormatAwareTest(
     }
   }
 
-  // ============= COMPLETION FALLBACK FOR UNFILLED SLOTS =============
-  for (const itemNumber of unfilledItemNumbers) {
-    if (allQuestions[itemNumber - 1]) continue;
-    const slot = sectionedSlots[itemNumber - 1];
-    const section = sectionMap.get(slot.section_id!);
-    const criterion = config.tosCriteria.find(
-      (c) => c.topic === slot.topic && c.bloom_level === slot.bloom_level
-    ) || config.tosCriteria[0] || {
-      topic: slot.topic,
-      bloom_level: slot.bloom_level,
-      difficulty: slot.difficulty,
-      count: 1
-    };
-    const fallback = generateTypedQuestion(section.questionType, criterion, itemNumber, user.id);
-    const dedupCheck = dedupTracker.check(fallback);
-    if (dedupCheck.duplicate) {
-      console.warn(`   ⚠️ Fallback question for slot #${itemNumber} rejected: ${dedupCheck.reason}`);
-      continue;
-    }
-    dedupTracker.register(fallback);
-    const mapped = {
-      ...fallback,
-      question_number: itemNumber,
-      section_id: slot.section_id,
-      section_label: slot.section_label,
-      section_title: slot.section_title,
-      question_type: section.questionType,
-      points: section.pointsPerQuestion,
-      needs_review: true,
-      validation_notes: 'Final completion fallback used after generation shortfall'
-    } as SectionedQuestion;
-
-    allQuestions[itemNumber - 1] = mapped;
-    answerKey.push({
-      question_number: mapped.question_number,
-      display_number: String(mapped.question_number),
-      question_id: mapped.id,
-      correct_answer: mapped.correct_answer,
-      section: mapped.section_label,
-      question_type: mapped.question_type,
-      points: mapped.points
-    });
-
-    const targetSection = sectionResults.find((s) => s.id === slot.section_id);
-    if (targetSection) {
-      targetSection.questions.push(mapped);
-      targetSection.totalPoints += mapped.points;
-    }
-  }
-
-  // ============= HARD INCOMPLETE-EXAM GATE =============
-  const stillUnfilled: number[] = [];
-  for (let i = 1; i <= requiredTotal; i += 1) {
-    if (!allQuestions[i - 1]) stillUnfilled.push(i);
-  }
-  if (stillUnfilled.length > 0) {
-    throw new Error(
-      `Generation incomplete: ${requiredTotal - stillUnfilled.length} of ${requiredTotal} slots filled; ${stillUnfilled.length} unfilled (items: ${stillUnfilled.join(', ')}). No incomplete exam was saved.`
-    );
-  }
-
   validateGeneratedPlanQuestions(sectionedSlots, allQuestions);
-
-  let totalPoints = sectionResults.reduce((sum, s) => sum + s.totalPoints, 0);
-
-  console.log(`✅ TOS CONTRACT SATISFIED: ${allQuestions.length}/${requiredTotal} questions`);
 
   // Final compile pass: independently shuffle MCQ choices, rebalance answer
   // letters, and recalculate the stored key before persistence/export.
   const securedQuestions = shuffleExamChoices(allQuestions).items as SectionedQuestion[];
   const securedAnswerKey = securedQuestions.map((q) => {
-    const existing = answerKey.find((entry) => entry.question_number === q.question_number) || {};
     return {
-      ...existing,
       question_number: q.question_number,
       question_id: q.id,
       correct_answer: q.correct_answer,
@@ -638,6 +1182,14 @@ export async function generateFormatAwareTest(
       points: q.points
     };
   });
+  validateGeneratedPlanQuestions(sectionedSlots, securedQuestions);
+  validateAnswerKey(securedQuestions, securedAnswerKey);
+
+  for (const sectionResult of sectionResults) {
+    sectionResult.questions = securedQuestions.filter((question) => question.section_id === sectionResult.id);
+    sectionResult.totalPoints = sectionResult.questions.reduce((sum, question) => sum + question.points, 0);
+  }
+  const totalPoints = sectionResults.reduce((sum, section) => sum + section.totalPoints, 0);
 
   // The generated questionnaire must be permanently bound to the exact saved TOS
   // that produced it. Verified before persistence — never inferred afterwards.
@@ -646,6 +1198,7 @@ export async function generateFormatAwareTest(
   // Save to database - cast items and answer_key to Json type
   const testData = {
     title: config.testTitle,
+    format_id: selectedFormat.id,
     subject: config.testMetadata?.subject || null,
     course: config.testMetadata?.course || null,
     year_section: config.testMetadata?.year_section || null,
@@ -675,7 +1228,7 @@ export async function generateFormatAwareTest(
   return {
     id: savedTest.id,
     title: config.testTitle,
-    format_id: config.format.id,
+    format_id: selectedFormat.id,
     sections: sectionResults,
     answer_key: securedAnswerKey,
     totalItems: securedQuestions.length,
@@ -894,11 +1447,32 @@ async function generateSectionQuestions(
 async function saveGeneratedQuestionsToBank(
   questions: any[],
   userId: string,
-  criteria: TOSCriteria[]
+  criteria: TOSCriteria[],
+  testMetadata?: FormatAwareTestConfig["testMetadata"]
 ): Promise<any[]> {
   const saved: any[] = [];
 
   for (const q of questions) {
+    const subjectMeta = testMetadata?.tos_id
+      ? await resolveGeneratedQuestionSubject({
+        academic_subject_id: q.metadata?.academic_subject_id,
+        subject: q.subject,
+        topic: q.topic || criteria[0]?.topic,
+        subject_code: q.subject_code,
+        subject_description: q.subject_description,
+        category: q.category,
+        specialization: q.specialization,
+      }, testMetadata.tos_id)
+      : await resolveSubjectMetadata({
+        academic_subject_id: testMetadata?.academic_subject_id,
+        subject: testMetadata?.subject_code || testMetadata?.subject_no || q.subject,
+        topic: q.topic || criteria[0]?.topic,
+        subject_code: testMetadata?.subject_code || testMetadata?.subject_no || q.subject_code,
+        subject_description: testMetadata?.subject_description || testMetadata?.description || q.subject_description,
+        category: testMetadata?.category || q.category,
+        specialization: testMetadata?.specialization || q.specialization,
+      });
+
     try {
       const qText = q.question_text || '';
 
@@ -918,33 +1492,6 @@ async function saveGeneratedQuestionsToBank(
         continue;
       }
 
-      // Resolve hierarchical metadata
-      const subjectMeta = resolveSubjectMetadata({
-        subject: q.subject,
-        topic: q.topic || criteria[0]?.topic,
-        subject_code: q.subject_code,
-        subject_description: q.subject_description,
-        category: q.category,
-        specialization: q.specialization,
-      });
-
-      // Align to existing subject records to prevent duplicates
-      if (subjectMeta.subject_description) {
-        const { data: existingSubject } = await supabase
-          .from('questions')
-          .select('subject_code, category, specialization')
-          .eq('subject_description', subjectMeta.subject_description)
-          .eq('deleted', false)
-          .limit(1)
-          .maybeSingle();
-
-        if (existingSubject) {
-          if (existingSubject.subject_code) subjectMeta.subject_code = existingSubject.subject_code;
-          if (existingSubject.category) subjectMeta.category = existingSubject.category;
-          if (existingSubject.specialization) subjectMeta.specialization = existingSubject.specialization;
-        }
-      }
-
       const { data: dbQuestion, error } = await supabase
         .from('questions')
         .insert({
@@ -955,26 +1502,36 @@ async function saveGeneratedQuestionsToBank(
           topic: q.topic || criteria[0]?.topic || '',
           bloom_level: q.bloom_level || criteria[0]?.bloom_level || 'Understanding',
           difficulty: q.difficulty || criteria[0]?.difficulty || 'Average',
-          knowledge_dimension: q.knowledge_dimension || 'conceptual',
+          knowledge_dimension: normalizeKnowledgeDimension(q.knowledge_dimension),
+          subject: `${subjectMeta.subject_code} - ${subjectMeta.subject_description}`,
           category: subjectMeta.category,
           specialization: subjectMeta.specialization,
           subject_code: subjectMeta.subject_code,
           subject_description: subjectMeta.subject_description,
+          tos_id: testMetadata?.tos_id || null,
           created_by: 'ai',
           approved: true,
           status: 'approved',
           owner: userId,
           ai_confidence_score: q.ai_confidence_score || 0.75,
           needs_review: false,
-          metadata: { ...(q.metadata || {}), auto_generated: true, saved_to_bank: true }
+          metadata: {
+            ...(q.metadata || {}),
+            subject_no: subjectMeta.subject_code,
+            academic_subject_id: subjectMeta.academic_subject_id,
+            subject_description: subjectMeta.subject_description,
+            category: subjectMeta.category,
+            specialization: subjectMeta.specialization,
+            tos_id: testMetadata?.tos_id || null,
+            auto_generated: true,
+            saved_to_bank: true
+          }
         })
         .select()
         .single();
 
       if (error) {
-        console.error('   ❌ Failed to save AI question to bank:', error.message);
-        saved.push(q); // Still use the unsaved question for this test
-        continue;
+        throw new Error(`Failed to save AI question to the question bank: ${error.message}`);
       }
 
       // Log generation
@@ -991,7 +1548,7 @@ async function saveGeneratedQuestionsToBank(
       saved.push(dbQuestion);
     } catch (err) {
       console.error('   ❌ Error saving question to bank:', err);
-      saved.push(q);
+      throw err;
     }
   }
 
@@ -1037,7 +1594,7 @@ async function generateTypedQuestions(
 
       for (const q of aiQuestions) {
         if (accepted.length >= count) break;
-        const qText = q.question_text || q.text || '';
+        const qText = q.question_text || (q as any).text || '';
 
         // Check text similarity against all existing questions
         if (isDuplicateByText(qText, allQuestionTexts)) {
@@ -1114,9 +1671,13 @@ async function generateTypedQuestionsViaAI(
   questionType: QuestionType,
   criteria: TOSCriteria[],
   count: number,
-  userId: string
-): Promise<any[]> {
-  const questions: any[] = [];
+  userId: string,
+  regeneration?: {
+    slot: GenerationSlot;
+    rejected: Array<{ question: string; reason: string }>;
+  }
+): Promise<QuestionCandidate[]> {
+  const questions: QuestionCandidate[] = [];
   
   // Distribute count across criteria
   const perCriteria = Math.ceil(count / Math.max(criteria.length, 1));
@@ -1133,16 +1694,19 @@ async function generateTypedQuestionsViaAI(
       body: {
         topic: criterion.topic,
         bloom_level: criterion.bloom_level || 'Understanding',
-        knowledge_dimension: criterion.knowledge_dimension || 'conceptual',
+        knowledge_dimension: normalizeKnowledgeDimension(criterion.knowledge_dimension),
         difficulty: criterion.difficulty || 'Average',
         count: toGenerate,
-        question_type: edgeQuestionType
+        question_type: edgeQuestionType,
+        regeneration_context: regeneration
+          ? buildSlotRegenerationContext(regeneration.slot, regeneration.rejected)
+          : undefined
       }
     });
     
     if (error) {
       console.error(`   ❌ Edge function error for ${questionType}:`, error);
-      continue;
+      throw new Error(`Constrained ${questionType} generation failed for question ${regeneration?.slot.item_number ?? 'batch'}: ${error.message}`);
     }
     
     const aiQuestions = data?.questions || [];
@@ -1173,13 +1737,20 @@ function mapAIResponseToQuestion(
     topic: criterion.topic,
     bloom_level: criterion.bloom_level || aiQ.bloom_level,
     difficulty: criterion.difficulty || aiQ.difficulty,
-    knowledge_dimension: criterion.knowledge_dimension || aiQ.knowledge_dimension || 'conceptual',
+    knowledge_dimension: normalizeKnowledgeDimension(
+      criterion.knowledge_dimension ?? aiQ.knowledge_dimension
+    ),
     created_by: 'ai',
     status: 'approved',
     approved: true,
     owner: userId,
     ai_confidence_score: 0.85,
-    metadata: { generated_for_section: questionType, ai_generated: true }
+    metadata: {
+      generated_for_section: questionType,
+      ai_generated: true,
+      structure_validated: aiQ.structure_validated,
+      rejection_reasons: aiQ.rejection_reasons
+    }
   };
   
   switch (questionType) {
@@ -1269,7 +1840,7 @@ function generateTypedQuestion(
     topic: criterion.topic,
     bloom_level: criterion.bloom_level,
     difficulty: criterion.difficulty,
-    knowledge_dimension: criterion.knowledge_dimension || 'conceptual',
+    knowledge_dimension: normalizeKnowledgeDimension(criterion.knowledge_dimension),
     created_by: 'ai',
     status: 'approved',
     approved: true,

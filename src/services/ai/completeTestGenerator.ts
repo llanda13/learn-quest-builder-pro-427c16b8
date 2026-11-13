@@ -3,8 +3,8 @@ import { IntelligentQuestionSelector } from "./intelligentSelector";
 import { generateQuestions } from "./generate";
 import type { BloomLevel, Difficulty } from "./classify";
 import { QuestionUniquenessStore, createQuestionFingerprint } from "./questionUniquenessChecker";
-import type { AnswerType, KnowledgeDimension } from "@/types/knowledge";
-import { resolveSubjectMetadata } from "./subjectMetadataResolver";
+import { normalizeKnowledgeDimension, type AnswerType, type KnowledgeDimension } from "@/types/knowledge";
+import { resolveGeneratedQuestionSubject } from "./subjectMetadataResolver";
 import { shuffleExamChoices } from "@/utils/shuffleExamChoices";
 import { assertTosLink } from "@/services/db/tosLink";
 
@@ -377,37 +377,15 @@ export class CompleteTestGenerator {
     for (const q of questions) {
       try {
         // Resolve category/specialization/subject metadata
-        const subjectMeta = resolveSubjectMetadata({
+        const subjectMeta = await resolveGeneratedQuestionSubject({
+          academic_subject_id: q.metadata?.academic_subject_id,
           subject: q.subject,
           topic: q.topic,
           subject_code: q.subject_code,
           subject_description: q.subject_description,
           category: q.category,
           specialization: q.specialization,
-        });
-
-        // DB-level dedup: check if a question with matching subject_description exists
-        // If so, align subject_code to the existing record to prevent duplicates
-        if (subjectMeta.subject_description) {
-          const { data: existingSubject } = await supabase
-            .from('questions')
-            .select('subject_code, subject_description, category, specialization')
-            .eq('subject_description', subjectMeta.subject_description)
-            .eq('deleted', false)
-            .limit(1)
-            .maybeSingle();
-
-          if (existingSubject) {
-            // Match found — adopt existing code to prevent duplicates
-            if (existingSubject.subject_code && existingSubject.subject_code !== subjectMeta.subject_code) {
-              console.log(`   🔗 Subject dedup: "${subjectMeta.subject_description}" already exists with code ${existingSubject.subject_code}, adopting it`);
-              subjectMeta.subject_code = existingSubject.subject_code;
-            }
-            // Also adopt category/specialization if they were inferred
-            if (existingSubject.category) subjectMeta.category = existingSubject.category;
-            if (existingSubject.specialization) subjectMeta.specialization = existingSubject.specialization;
-          }
-        }
+        }, tosId);
 
         // Insert into questions table
         const { data: saved, error: insertError } = await supabase
@@ -420,9 +398,10 @@ export class CompleteTestGenerator {
             topic: q.topic,
             bloom_level: q.bloom_level,
             difficulty: q.difficulty,
-            knowledge_dimension: q.knowledge_dimension || 'conceptual',
+            knowledge_dimension: normalizeKnowledgeDimension(q.knowledge_dimension),
             category: subjectMeta.category,
             specialization: subjectMeta.specialization,
+            subject: `${subjectMeta.subject_code} - ${subjectMeta.subject_description}`,
             subject_code: subjectMeta.subject_code,
             subject_description: subjectMeta.subject_description,
             created_by: 'ai',
@@ -432,14 +411,13 @@ export class CompleteTestGenerator {
             ai_confidence_score: q.ai_confidence_score || 0.75,
             needs_review: false,
             tos_id: tosId || null,
-            metadata: q.metadata || {}
+            metadata: { ...(q.metadata || {}), academic_subject_id: subjectMeta.academic_subject_id }
           })
           .select()
           .single();
 
         if (insertError) {
-          console.error("Error saving question:", insertError);
-          continue;
+          throw new Error(`Failed to save generated question: ${insertError.message}`);
         }
 
         savedQuestions.push(saved);
@@ -463,6 +441,7 @@ export class CompleteTestGenerator {
 
       } catch (error) {
         console.error("Error in saveAIQuestions:", error);
+        throw error;
       }
     }
 

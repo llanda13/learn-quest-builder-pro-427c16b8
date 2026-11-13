@@ -1,6 +1,5 @@
 import { supabase } from "@/integrations/supabase/client";
 import type { TOSRequirement } from "./intelligentSelector";
-import { resolveSubjectMetadata } from "./subjectMetadataResolver";
 
 export interface GenerationRequest {
   requirement: TOSRequirement;
@@ -57,12 +56,14 @@ export class AutoQuestionGenerator {
     // Call the AI generation edge function
     const { data, error } = await supabase.functions.invoke('generate-questions', {
       body: {
-        topic: requirement.topic,
-        bloom_level: requirement.bloom_level,
-        difficulty: requirement.difficulty,
-        count: requirement.count,
         tos_id: tosId,
-        teacher_id: teacherId
+        request: {
+          topic: requirement.topic,
+          bloom_level: requirement.bloom_level,
+          difficulty: requirement.difficulty,
+          count: requirement.count,
+        },
+        teacher_id: teacherId,
       }
     });
 
@@ -74,64 +75,24 @@ export class AutoQuestionGenerator {
       throw new Error('No questions generated');
     }
 
-    // Insert generated questions with pending status
-    const questionInserts = data.questions.map((q: any) => {
-      const subjectMeta = resolveSubjectMetadata({
-        subject: q.subject,
-        topic: requirement.topic,
-        subject_code: q.subject_code,
-        subject_description: q.subject_description,
-        category: q.category,
-        specialization: q.specialization,
-      });
-
-      return {
-        question_text: q.question_text,
-        question_type: q.question_type || 'mcq',
-        choices: q.choices || [],
-        correct_answer: q.correct_answer,
-        topic: requirement.topic,
-        bloom_level: requirement.bloom_level,
-        difficulty: requirement.difficulty,
-        subject: q.subject || '',
-        grade_level: q.grade_level || '',
-        cognitive_level: requirement.bloom_level,
-        knowledge_dimension: q.knowledge_dimension || '',
-        category: subjectMeta.category,
-        specialization: subjectMeta.specialization,
-        subject_code: subjectMeta.subject_code,
-        subject_description: subjectMeta.subject_description,
-        created_by: 'ai',
-        status: 'pending',
-        approved: false,
-        ai_confidence_score: q.confidence || 0.8,
-        tos_id: tosId,
-        metadata: {
-          generated_for_teacher: teacherId,
-          generation_timestamp: new Date().toISOString(),
-          auto_generated: true
-        }
-      };
-    });
-
-    const { data: insertedQuestions, error: insertError } = await supabase
-      .from('questions')
-      .insert(questionInserts)
-      .select('id');
-
-    if (insertError) {
-      throw new Error(`Failed to insert questions: ${insertError.message}`);
+    // The edge function persists questions before returning them.
+    const insertedQuestions = data.questions as Array<{ id?: string }>;
+    if (!insertedQuestions.length || insertedQuestions.some(question => !question.id)) {
+      throw new Error('Question generation returned rows without persisted question IDs.');
     }
+    const questionIds = insertedQuestions
+      .map(question => question.id)
+      .filter((id): id is string => Boolean(id));
 
     // Log the generation
     await this.logGeneration(
-      insertedQuestions.map(q => q.id),
+      questionIds,
       request
     );
 
     return {
       success: true,
-      questionIds: insertedQuestions.map(q => q.id)
+      questionIds
     };
   }
 

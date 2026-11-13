@@ -270,15 +270,17 @@ export const AcademicHierarchy = {
       .from("academic_subjects")
       .select("*, academic_specializations(name, academic_categories(name))")
       .ilike("code", code.trim())
-      .eq("deleted", false)
-      .limit(1)
-      .maybeSingle();
+      .eq("deleted", false);
     if (error) throw error;
-    if (!data) return null;
+    if (!data?.length) return null;
+    if (data.length > 1) {
+      throw new Error(`Subject code "${code}" matches multiple registered subjects. Select a subject with its category and specialization.`);
+    }
+    const record = data[0];
     return {
-      ...(data as any),
-      specialization_name: (data as any).academic_specializations?.name,
-      category_name: (data as any).academic_specializations?.academic_categories?.name,
+      ...(record as any),
+      specialization_name: (record as any).academic_specializations?.name,
+      category_name: (record as any).academic_specializations?.academic_categories?.name,
     } as AcademicSubject;
   },
 

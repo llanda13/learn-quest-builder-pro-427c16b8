@@ -4,6 +4,8 @@ import type { BloomLevel, Difficulty } from "./classify";
 import { generateQuestionsWithAI } from "./questionGenerator";
 import { shuffleExamChoices } from "@/utils/shuffleExamChoices";
 import { assertTosLink } from "@/services/db/tosLink";
+import { quickClassifyKnowledgeDimension } from "@/services/analysis/knowledgeDeterminer";
+import { normalizeKnowledgeDimension } from "@/types/knowledge";
 
 export interface TOSCriteria {
   topic: string;
@@ -351,19 +353,20 @@ async function saveAIQuestionsToBank(
   userId: string,
   tosId: string
 ): Promise<any[]> {
-  const { resolveSubjectMetadata } = await import('./subjectMetadataResolver');
+  const { resolveGeneratedQuestionSubject } = await import('./subjectMetadataResolver');
   const savedQuestions: any[] = [];
 
   for (const q of questions) {
     try {
-      const subjectMeta = resolveSubjectMetadata({
+      const subjectMeta = await resolveGeneratedQuestionSubject({
+        academic_subject_id: q.metadata?.academic_subject_id,
         subject: q.subject,
         topic: q.topic,
         subject_code: q.subject_code,
         subject_description: q.subject_description,
         category: q.category,
         specialization: q.specialization,
-      });
+      }, tosId);
 
       const { data: saved, error: insertError } = await supabase
         .from('questions')
@@ -375,11 +378,14 @@ async function saveAIQuestionsToBank(
           topic: q.topic,
           bloom_level: q.bloom_level,
           difficulty: q.difficulty,
-          knowledge_dimension: 'conceptual',
+          knowledge_dimension: normalizeKnowledgeDimension(
+            q.knowledge_dimension ?? quickClassifyKnowledgeDimension(q.question_text)
+          ),
           category: subjectMeta.category,
           specialization: subjectMeta.specialization,
           subject_code: subjectMeta.subject_code,
           subject_description: subjectMeta.subject_description,
+          subject: `${subjectMeta.subject_code} - ${subjectMeta.subject_description}`,
           created_by: 'ai',
           approved: true,
           status: 'approved',
@@ -387,14 +393,13 @@ async function saveAIQuestionsToBank(
           ai_confidence_score: 0.75,
           needs_review: false,
           tos_id: tosId,
-          metadata: { auto_generated: true, points: q.points || 1 }
+          metadata: { auto_generated: true, points: q.points || 1, academic_subject_id: subjectMeta.academic_subject_id }
         })
         .select()
         .single();
 
       if (insertError) {
-        console.error("Error saving question:", insertError);
-        continue;
+        throw new Error(`Failed to save generated question: ${insertError.message}`);
       }
 
       savedQuestions.push(saved);
@@ -415,6 +420,7 @@ async function saveAIQuestionsToBank(
 
     } catch (error) {
       console.error("Error in saveAIQuestionsToBank:", error);
+      throw error;
     }
   }
 

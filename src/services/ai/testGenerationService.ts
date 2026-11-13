@@ -1,5 +1,7 @@
 import { supabase } from "@/integrations/supabase/client";
 import { shuffleExamChoices } from "@/utils/shuffleExamChoices";
+import { INSUFFICIENT_CREDITS_MESSAGE, isInsufficientCreditsMessage } from "./aiErrorHandling";
+import { normalizeKnowledgeDimension } from "@/types/knowledge";
 
 export interface TOSCriteria {
   topic: string;
@@ -26,6 +28,42 @@ export interface GenerationSlot {
   difficulty: string;
   knowledge_dimension?: string;
   question_type?: string;
+}
+
+
+export type QuestionGenerationFailureCategory =
+  | 'provider_failure'
+  | 'timeout'
+  | 'malformed_response'
+  | 'validation_failure'
+  | 'database_failure'
+  | 'unfilled_slots'
+  | 'insufficient_credits';
+
+export class QuestionGenerationError extends Error {
+  constructor(
+    message: string,
+    public readonly category: QuestionGenerationFailureCategory,
+    public readonly unfilledItemNumbers: number[] = []
+  ) {
+    super(message);
+    this.name = 'QuestionGenerationError';
+  }
+}
+
+function safeErrorMessage(value: unknown): string {
+  const message = String(value ?? 'Unknown generation error')
+    .replace(/Bearer\s+[^\s,;]+/gi, 'Bearer [redacted]')
+    .replace(/\b(sk-[A-Za-z0-9_-]{8,})\b/g, '[redacted]')
+    .replace(/((?:api[_-]?key|authorization|token|secret)\s*[:=]\s*)[^\s,;]+/gi, '$1[redacted]')
+    .replace(/[\r\n\t]+/g, ' ')
+    .trim();
+  return message.slice(0, 500) || 'Unknown generation error';
+}
+
+export function formatQuestionnaireGenerationError(error: unknown): string {
+  const details = error instanceof Error ? error.message : safeErrorMessage(error);
+  return `Questionnaire generation failed: ${safeErrorMessage(details)} Your TOS data has been preserved. No test questionnaire was saved.`;
 }
 
 function normalizeQuestionType(type?: string): string {
@@ -183,6 +221,15 @@ export async function generateTestFromTOS(
     throw new Error("User not authenticated");
   }
   console.log("✅ User authenticated:", user.id);
+  const { resolveGeneratedQuestionSubject } = await import('./subjectMetadataResolver');
+  const canonicalSubject = await resolveGeneratedQuestionSubject({
+    academic_subject_id: testMetadata?.academic_subject_id,
+    subject: testMetadata?.subject_no || testMetadata?.subject,
+    subject_code: testMetadata?.subject_no,
+    subject_description: testMetadata?.description || testMetadata?.subject_description,
+    category: testMetadata?.category,
+    specialization: testMetadata?.specialization,
+  }, testMetadata?.tos_id);
 
   // New approach: Expand TOS into an explicit item-level generation plan
   // Each plan entry maps to a fixed exam slot and will be filled exactly once.
@@ -202,6 +249,7 @@ export async function generateTestFromTOS(
       .select('*')
       .eq('deleted', false)
       .eq('approved', true)
+      .eq('subject_code', canonicalSubject.subject_code)
       .eq('difficulty', slot.difficulty)
       .eq('topic', slot.topic)
       .eq('bloom_level', slot.bloom_level);
@@ -261,7 +309,17 @@ export async function generateTestFromTOS(
           difficulty: slot.difficulty,
           count: 1,
           type: slot.question_type || 'mcq'
-        } as any, 1, user.id, { slotNumber: slot.item_number });
+        } as any, 1, user.id, {
+          slotNumber: slot.item_number,
+          tosId: testMetadata?.tos_id,
+          academic_subject_id: canonicalSubject.academic_subject_id,
+          subject_no: canonicalSubject.subject_code,
+          subject: `${canonicalSubject.subject_code} - ${canonicalSubject.subject_description}`,
+          subject_description: canonicalSubject.subject_description,
+          category: canonicalSubject.category,
+          specialization: canonicalSubject.specialization,
+          existingStems: selectedQuestions.filter(Boolean).map(question => question.question_text),
+        });
 
         chosen = (generated && generated[0]) || null;
         if (!chosen) {
@@ -276,6 +334,13 @@ export async function generateTestFromTOS(
         }
       } catch (err) {
         console.error('   ❌ Error generating AI question for slot:', err);
+        if (err instanceof QuestionGenerationError
+          && ['insufficient_credits', 'database_failure', 'validation_failure', 'unfilled_slots', 'malformed_response'].includes(err.category)) {
+          throw err;
+        }
+        if (err instanceof Error && /subject|registered|TOS/i.test(err.message)) {
+          throw err;
+        }
         const fallback = await generateFallbackQuestions({
           topic: slot.topic,
           bloom_level: slot.bloom_level,
@@ -507,14 +572,25 @@ export async function generateQuestionsWithAI(
   criteria: TOSCriteria,
   count: number,
   userId: string,
-  options?: { slotNumber?: number; slotId?: string; existingStems?: string[] }
+  options?: {
+    slotNumber?: number;
+    slotId?: string;
+    tosId?: string;
+    academic_subject_id?: string;
+    subject_no?: string;
+    subject?: string;
+    subject_description?: string;
+    category?: string;
+    specialization?: string;
+    existingStems?: string[];
+  }
 ): Promise<any[]> {
   console.log(`   🤖 Calling AI generation edge function...`);
   console.log(`      Topic: ${criteria.topic}, Bloom: ${criteria.bloom_level}, Difficulty: ${criteria.difficulty}, Count: ${count}`);
   
   // ✅ FIX: Add force_ai_generation flag to ensure AI generates when bank is empty
   const invokeBody: any = {
-    tos_id: options?.slotNumber ? `slot-${options.slotNumber}` : 'temp-generation',
+    tos_id: options?.tosId || (options?.slotNumber ? `slot-${options.slotNumber}` : 'temp-generation'),
     total_items: count,
     topic: criteria.topic,
     bloom_level: criteria.bloom_level,
@@ -548,19 +624,8 @@ export async function generateQuestionsWithAI(
     prefer_existing: false,
     force_ai_generation: true
   };
-
-  // BUG 1: seed the edge function's dedup blacklist with stems already accepted
-  // in this exam so retry requests cannot regenerate the same question.
-  if (options?.existingStems?.length) {
-    invokeBody.existing_stems = options.existingStems.slice(0, 300);
-  }
-
-  // BUG 2: the edge function must generate the section's question type instead
-  // of its internal default type distribution.
-  const requestedType = normalizeQuestionType(criteria.question_type);
-  if (requestedType) {
-    invokeBody.requested_question_type = requestedType === 'fill_blank' ? 'short_answer' : requestedType;
-  }
+  invokeBody.requested_question_type = normalizeQuestionType(criteria.question_type);
+  invokeBody.existing_stems = options?.existingStems || [];
 
   if (options?.slotId) invokeBody.target_slot_id = options.slotId;
 
@@ -571,15 +636,36 @@ export async function generateQuestionsWithAI(
   if (error) {
     console.error("   ❌ Edge function error:", error);
     console.error("      Error details:", JSON.stringify(error, null, 2));
-    // ✅ Fallback: Generate local template questions instead of failing
-    console.warn("   ⚠️ Edge function failed, generating fallback questions...");
-    return generateFallbackQuestions(criteria, count, userId);
+    let message = safeErrorMessage(error.message || error);
+    let responseCode: string | undefined;
+    const response = error.context instanceof Response ? error.context : undefined;
+    const status = Number(error.status ?? response?.status);
+    if (response) {
+      const responseText = await response.clone().text();
+      try {
+        const responseBody = JSON.parse(responseText);
+        responseCode = typeof responseBody?.code === 'string' ? responseBody.code : undefined;
+        if (typeof responseBody?.error === 'string') {
+          message = responseBody.error;
+        } else if (typeof responseBody?.message === 'string') {
+          message = responseBody.message;
+        }
+      } catch {
+        if (responseText) message = responseText;
+      }
+    }
+
+    if (status === 402 || responseCode === 'insufficient_credits' || isInsufficientCreditsMessage(message)) {
+      throw new QuestionGenerationError(INSUFFICIENT_CREDITS_MESSAGE, 'insufficient_credits');
+    }
+    throw new QuestionGenerationError(
+      message,
+      /timeout|timed out/i.test(message) ? 'timeout' : 'provider_failure'
+    );
   }
 
-  if (!data) {
-    console.error("   ❌ No data returned from edge function");
-    console.warn("   ⚠️ No data returned, generating fallback questions...");
-    return generateFallbackQuestions(criteria, count, userId);
+  if (!data || data.success !== true || !Array.isArray(data.questions)) {
+    throw new QuestionGenerationError('Question generation returned a malformed response.', 'malformed_response');
   }
 
   console.log(`   ✓ Edge function response:`, {
@@ -587,15 +673,24 @@ export async function generateQuestionsWithAI(
     questionCount: data.questions?.length || 0
   });
 
-  const generatedQuestions = data?.questions || [];
+  const generatedQuestions = data.questions;
+  if (generatedQuestions.some((question: any) =>
+    question?.metadata?.generated_by === 'deterministic_fallback'
+  )) {
+    throw new QuestionGenerationError('The generation service returned a deterministic fallback instead of AI-generated questions.', 'provider_failure');
+  }
 
   console.log(`   ✓ Received ${generatedQuestions.length} questions from edge function`);
 
-  // ✅ If edge function returned fewer questions than needed, fill with fallback
   if (generatedQuestions.length < count) {
-    console.warn(`   ⚠️ Edge function returned ${generatedQuestions.length}/${count}, generating ${count - generatedQuestions.length} fallback questions...`);
-    const fallback = await generateFallbackQuestions(criteria, count - generatedQuestions.length, userId);
-    return [...generatedQuestions, ...fallback];
+    const missingItems = options?.slotNumber
+      ? [options.slotNumber]
+      : Array.from({ length: count - generatedQuestions.length }, (_, index) => index + 1);
+    throw new QuestionGenerationError(
+      `Generation left required question slots unfilled. Unfilled items: ${missingItems.join(', ')}`,
+      'unfilled_slots',
+      missingItems
+    );
   }
 
   // Filter for only AI-generated questions that need to be saved
@@ -611,16 +706,17 @@ export async function generateQuestionsWithAI(
   console.log(`   💾 Saving ${questionsToSave.length} AI-generated questions to database...`);
 
   // Store AI-generated questions into the question bank for reuse
-  const { resolveSubjectMetadata } = await import('./subjectMetadataResolver');
-  const questionsToInsert = questionsToSave.map((q: any) => {
-    const subjectMeta = resolveSubjectMetadata({
-      subject: q.subject,
+  const { resolveGeneratedQuestionSubject } = await import('./subjectMetadataResolver');
+  const questionsToInsert = await Promise.all(questionsToSave.map(async (q: any) => {
+    const subjectMeta = await resolveGeneratedQuestionSubject({
+      academic_subject_id: q.metadata?.academic_subject_id || options?.academic_subject_id,
+      subject: q.subject || options?.subject_no || options?.subject,
       topic: q.topic,
-      subject_code: q.subject_code,
-      subject_description: q.subject_description,
-      category: q.category,
-      specialization: q.specialization,
-    });
+      subject_code: q.subject_code || options?.subject_no,
+      subject_description: q.subject_description || options?.subject_description,
+      category: q.category || options?.category,
+      specialization: q.specialization || options?.specialization,
+    }, options?.tosId);
 
     return {
       question_text: q.question_text,
@@ -630,20 +726,33 @@ export async function generateQuestionsWithAI(
       topic: q.topic,
       bloom_level: q.bloom_level,
       difficulty: q.difficulty,
-      knowledge_dimension: q.knowledge_dimension,
+      knowledge_dimension: normalizeKnowledgeDimension(q.knowledge_dimension),
       category: subjectMeta.category,
       specialization: subjectMeta.specialization,
       subject_code: subjectMeta.subject_code,
       subject_description: subjectMeta.subject_description,
+      subject: `${subjectMeta.subject_code} - ${subjectMeta.subject_description}`,
       created_by: 'ai',
-      status: 'approved',
-      approved: true,
+      status: q.needs_review ? 'pending' : 'approved',
+      approved: q.needs_review !== true,
       owner: userId,
       ai_confidence_score: q.ai_confidence_score || 0.6,
-      needs_review: false,
-      metadata: q.metadata || {}
+      needs_review: q.needs_review === true,
+      validation_status: q.validation_status || null,
+      validation_reasons: q.validation_reasons || [],
+      tos_id: options?.tosId || null,
+      metadata: {
+        ...(q.metadata || {}),
+        academic_subject_id: subjectMeta.academic_subject_id,
+        tos_id: options?.tosId || null,
+        item_number: q.item_number ?? null,
+        edge_validation_status: q.validation_status || null,
+        validation_reasons: q.validation_reasons || [],
+        bloom_assigned: criteria.bloom_level,
+        bloom_detected: q.bloom_detected || null,
+      }
     };
-  });
+  }));
 
   console.log(`   📝 Insert payload sample:`, {
     count: questionsToInsert.length,
@@ -664,12 +773,23 @@ export async function generateQuestionsWithAI(
   if (insertError) {
     console.error("   ❌ Error inserting generated questions:", insertError);
     console.error("      Insert error details:", JSON.stringify(insertError, null, 2));
-    // Don't throw - use the generated questions even if save fails
-    console.warn("   ⚠️ Using generated questions without saving to bank");
-    return generatedQuestions;
+    throw new QuestionGenerationError(
+      `Failed to save generated questions: ${safeErrorMessage(insertError.message)}`,
+      'database_failure'
+    );
   }
 
   console.log(`   ✅ Successfully inserted ${insertedQuestions?.length || 0} questions into bank`);
+
+  const hardValidationFailures = generatedQuestions
+    .filter((question: any) => question.needs_review && question.validation_reasons?.length)
+    .flatMap((question: any) => question.validation_reasons);
+  if (hardValidationFailures.length) {
+    throw new QuestionGenerationError(
+      `Generated questions failed validation: ${hardValidationFailures.join('; ')}`,
+      'validation_failure'
+    );
+  }
 
   // Log AI generation for tracking
   console.log(`   📊 Creating ${insertedQuestions?.length || 0} AI generation log entries...`);
@@ -933,7 +1053,7 @@ async function generateFallbackQuestions(
       topic: criteria.topic,
       bloom_level: criteria.bloom_level.charAt(0).toUpperCase() + criteria.bloom_level.slice(1).toLowerCase(),
       difficulty: criteria.difficulty,
-      knowledge_dimension: criteria.knowledge_dimension || 'conceptual',
+      knowledge_dimension: normalizeKnowledgeDimension(criteria.knowledge_dimension),
       created_by: 'fallback',
       status: 'approved',
       approved: true,

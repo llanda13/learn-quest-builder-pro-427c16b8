@@ -51,6 +51,7 @@ export interface GeneratedTest {
   semester?: string;
   term?: string;
   exam_type?: string;
+  format_id?: string | null;
   instructions?: string;
   tos_id?: string;
   time_limit?: number;

@@ -1,4 +1,6 @@
 import { supabase as _supabase } from "@/integrations/supabase/client";
+import { withCanonicalQuestionSubject } from "@/services/db/questionSubjectMetadata";
+import { normalizeKnowledgeDimension } from "@/types/knowledge";
 const supabase: any = _supabase;
 
 // Profile operations
@@ -88,9 +90,15 @@ export const TOS = {
 // Questions operations
 export const Questions = {
   async insertMany(rows: any[]) {
+    const canonicalRows = await Promise.all(rows.map((row) =>
+      withCanonicalQuestionSubject({
+        ...row,
+        knowledge_dimension: normalizeKnowledgeDimension(row.knowledge_dimension),
+      })
+    ));
     const { data, error } = await supabase
       .from('questions')
-      .insert(rows)
+      .insert(canonicalRows)
       .select();
     if (error) throw error;
     return data ?? [];
@@ -100,6 +108,7 @@ export const Questions = {
     topic?: string;
     bloom_level?: string;
     difficulty?: string;
+    subject_code?: string;
     approved?: boolean;
     owner?: string;
   }) {
@@ -111,6 +120,7 @@ export const Questions = {
     if (filters.topic) query = query.eq('topic', filters.topic);
     if (filters.bloom_level) query = query.eq('bloom_level', filters.bloom_level);
     if (filters.difficulty) query = query.eq('difficulty', filters.difficulty);
+    if (filters.subject_code) query = query.eq('subject_code', filters.subject_code);
     if (filters.approved !== undefined) query = query.eq('approved', filters.approved);
     if (filters.owner) query = query.eq('created_by', filters.owner);
 
