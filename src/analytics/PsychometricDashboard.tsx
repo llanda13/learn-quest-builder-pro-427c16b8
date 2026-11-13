@@ -4,8 +4,7 @@ import { Tabs, TabsContent, TabsList, TabsTrigger } from '@/components/ui/tabs';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
 import { Progress } from '@/components/ui/progress';
-import { ChartContainer, ChartTooltip, ChartTooltipContent } from '@/components/ui/chart';
-import { LineChart, Line, XAxis, YAxis, CartesianGrid, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell, Legend } from 'recharts';
+import { LineChart, Line, XAxis, YAxis, CartesianGrid, Tooltip, ResponsiveContainer, BarChart, Bar, PieChart, Pie, Cell } from 'recharts';
 import { TrendingUp, TrendingDown, Activity, AlertTriangle, CheckCircle, Clock } from 'lucide-react';
 import { itemAnalyzer, PsychometricReport } from '@/services/psychometrics/itemAnalysis';
 import { useToast } from '@/hooks/use-toast';
@@ -251,47 +250,26 @@ const PsychometricDashboard: React.FC<PsychometricDashboardProps> = ({ testId = 
                 <CardTitle>Reliability Trends</CardTitle>
               </CardHeader>
               <CardContent>
-                <ChartContainer
-                  config={{
-                    cronbach: { label: "Cronbach's Alpha", color: "hsl(var(--primary))" },
-                    splitHalf: { label: "Split-Half", color: "hsl(var(--chart-2))" }
-                  }}
-                  className="h-[200px]"
-                >
-                  <ResponsiveContainer width="100%" height="100%">
-                    <LineChart data={reliabilityData}>
-                      <CartesianGrid strokeDasharray="3 3" className="stroke-muted" />
-                      <XAxis 
-                        dataKey="date" 
-                        className="text-xs"
-                        tick={{ fill: 'hsl(var(--muted-foreground))' }}
-                      />
-                      <YAxis 
-                        domain={[0.7, 1]} 
-                        className="text-xs"
-                        tick={{ fill: 'hsl(var(--muted-foreground))' }}
-                      />
-                      <ChartTooltip content={<ChartTooltipContent />} />
-                      <Legend />
-                      <Line 
-                        type="monotone" 
-                        dataKey="cronbach" 
-                        stroke="hsl(var(--primary))" 
-                        strokeWidth={2}
-                        name="Cronbach's Alpha"
-                        dot={{ fill: 'hsl(var(--primary))' }}
-                      />
-                      <Line 
-                        type="monotone" 
-                        dataKey="splitHalf" 
-                        stroke="hsl(var(--chart-2))" 
-                        strokeWidth={2}
-                        name="Split-Half"
-                        dot={{ fill: 'hsl(var(--chart-2))' }}
-                      />
-                    </LineChart>
-                  </ResponsiveContainer>
-                </ChartContainer>
+                <ResponsiveContainer width="100%" height={200}>
+                  <LineChart data={reliabilityData}>
+                    <CartesianGrid strokeDasharray="3 3" />
+                    <XAxis dataKey="date" />
+                    <YAxis domain={[0.7, 1]} />
+                    <Tooltip />
+                    <Line 
+                      type="monotone" 
+                      dataKey="cronbach" 
+                      stroke="hsl(var(--primary))" 
+                      name="Cronbach's Alpha"
+                    />
+                    <Line 
+                      type="monotone" 
+                      dataKey="splitHalf" 
+                      stroke="hsl(var(--secondary))" 
+                      name="Split-Half"
+                    />
+                  </LineChart>
+                </ResponsiveContainer>
               </CardContent>
             </Card>
           </div>
@@ -304,35 +282,23 @@ const PsychometricDashboard: React.FC<PsychometricDashboardProps> = ({ testId = 
                 <CardTitle>Difficulty Distribution</CardTitle>
               </CardHeader>
               <CardContent>
-                <ChartContainer
-                  config={{
-                    veryEasy: { label: "Very Easy", color: "hsl(var(--chart-1))" },
-                    easy: { label: "Easy", color: "hsl(var(--chart-2))" },
-                    moderate: { label: "Moderate", color: "hsl(var(--chart-3))" },
-                    hard: { label: "Hard", color: "hsl(var(--chart-4))" },
-                    veryHard: { label: "Very Hard", color: "hsl(var(--chart-5))" }
-                  }}
-                  className="h-[250px]"
-                >
-                  <ResponsiveContainer width="100%" height="100%">
-                    <PieChart>
-                      <Pie
-                        data={difficultyData}
-                        cx="50%"
-                        cy="50%"
-                        outerRadius={80}
-                        dataKey="value"
-                        label={({ name, value }) => `${name}: ${value}`}
-                      >
-                        {difficultyData.map((entry, index) => (
-                          <Cell key={`cell-${index}`} fill={entry.color} />
-                        ))}
-                      </Pie>
-                      <ChartTooltip content={<ChartTooltipContent />} />
-                      <Legend />
-                    </PieChart>
-                  </ResponsiveContainer>
-                </ChartContainer>
+                <ResponsiveContainer width="100%" height={250}>
+                  <PieChart>
+                    <Pie
+                      data={difficultyData}
+                      cx="50%"
+                      cy="50%"
+                      outerRadius={80}
+                      dataKey="value"
+                      label={({ name, value }) => `${name}: ${value}`}
+                    >
+                      {difficultyData.map((entry, index) => (
+                        <Cell key={`cell-${index}`} fill={entry.color} />
+                      ))}
+                    </Pie>
+                    <Tooltip />
+                  </PieChart>
+                </ResponsiveContainer>
               </CardContent>
             </Card>
 

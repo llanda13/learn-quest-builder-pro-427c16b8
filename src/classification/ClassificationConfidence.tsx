@@ -1,12 +1,10 @@
-import React, { useState } from 'react';
+import React from 'react';
 import { Card, CardContent, CardHeader, CardTitle } from '@/components/ui/card';
 import { Progress } from '@/components/ui/progress';
 import { Badge } from '@/components/ui/badge';
 import { Button } from '@/components/ui/button';
-import { Collapsible, CollapsibleContent, CollapsibleTrigger } from '@/components/ui/collapsible';
-import { Brain, CircleCheck as CheckCircle, TriangleAlert as AlertTriangle, Info, TrendingUp, Target, ChevronDown, ChevronUp } from 'lucide-react';
+import { Brain, CircleCheck as CheckCircle, TriangleAlert as AlertTriangle, Info, TrendingUp, Target } from 'lucide-react';
 import { ConfidenceResult } from '@/services/ai/confidenceScoring';
-import { ClassificationExplanation } from '@/services/ai/explainability';
 
 interface ClassificationConfidenceProps {
   confidence: ConfidenceResult;
@@ -15,7 +13,6 @@ interface ClassificationConfidenceProps {
     knowledge_dimension: string;
     difficulty: string;
   };
-  explanation?: ClassificationExplanation;
   onValidate?: () => void;
   onReject?: () => void;
   showActions?: boolean;
@@ -24,12 +21,10 @@ interface ClassificationConfidenceProps {
 export const ClassificationConfidence: React.FC<ClassificationConfidenceProps> = ({
   confidence,
   classification,
-  explanation,
   onValidate,
   onReject,
   showActions = true
 }) => {
-  const [showExplanation, setShowExplanation] = useState(false);
   const getConfidenceColor = (score: number) => {
     if (score >= 0.8) return 'text-green-600';
     if (score >= 0.6) return 'text-yellow-600';
@@ -167,112 +162,6 @@ export const ClassificationConfidence: React.FC<ClassificationConfidenceProps> =
               ))}
             </ul>
           </div>
-        )}
-
-        {/* Enhanced Explanation Section */}
-        {explanation && (
-          <Collapsible open={showExplanation} onOpenChange={setShowExplanation} className="border-t pt-4">
-            <CollapsibleTrigger asChild>
-              <Button variant="outline" className="w-full flex items-center justify-between">
-                <span className="flex items-center gap-2">
-                  <Info className="w-4 h-4" />
-                  <span>Detailed Explanation</span>
-                </span>
-                {showExplanation ? <ChevronUp className="w-4 h-4" /> : <ChevronDown className="w-4 h-4" />}
-              </Button>
-            </CollapsibleTrigger>
-            <CollapsibleContent className="mt-4 space-y-4">
-              {/* Evidence Breakdown */}
-              <div className="space-y-3">
-                <h4 className="font-semibold text-sm">Evidence Analysis</h4>
-                <div className="grid gap-2">
-                  {explanation.supportingEvidence.verbsFound.length > 0 && (
-                    <div className="p-2 bg-muted/50 rounded">
-                      <span className="text-xs font-medium">Action Verbs Found:</span>
-                      <div className="flex flex-wrap gap-1 mt-1">
-                        {explanation.supportingEvidence.verbsFound.map((verb, i) => (
-                          <Badge key={i} variant="secondary" className="text-xs">{verb}</Badge>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                  {explanation.supportingEvidence.keywordsFound.length > 0 && (
-                    <div className="p-2 bg-muted/50 rounded">
-                      <span className="text-xs font-medium">Keywords Identified:</span>
-                      <div className="flex flex-wrap gap-1 mt-1">
-                        {explanation.supportingEvidence.keywordsFound.map((keyword, i) => (
-                          <Badge key={i} variant="outline" className="text-xs">{keyword}</Badge>
-                        ))}
-                      </div>
-                    </div>
-                  )}
-                </div>
-              </div>
-
-              {/* Reasoning */}
-              <div className="space-y-2">
-                <h4 className="font-semibold text-sm">Classification Reasoning</h4>
-                <ul className="space-y-1">
-                  {explanation.reasoning.map((reason, index) => (
-                    <li key={index} className="text-sm text-muted-foreground flex items-start gap-2">
-                      <span className="text-primary mt-1">→</span>
-                      <span>{reason}</span>
-                    </li>
-                  ))}
-                </ul>
-              </div>
-
-              {/* Weaknesses */}
-              {explanation.weaknesses.length > 0 && (
-                <div className="space-y-2">
-                  <h4 className="font-semibold text-sm text-yellow-600">Identified Weaknesses</h4>
-                  <ul className="space-y-1">
-                    {explanation.weaknesses.map((weakness, index) => (
-                      <li key={index} className="text-sm text-muted-foreground flex items-start gap-2">
-                        <AlertTriangle className="w-3 h-3 text-yellow-600 mt-1" />
-                        <span>{weakness}</span>
-                      </li>
-                    ))}
-                  </ul>
-                </div>
-              )}
-
-              {/* Visual Breakdown */}
-              <div className="space-y-2">
-                <h4 className="font-semibold text-sm">Evidence Strength Breakdown</h4>
-                <div className="space-y-2">
-                  <div>
-                    <div className="flex justify-between text-xs mb-1">
-                      <span>Bloom's Level Evidence</span>
-                      <span>{(explanation.visualBreakdown.bloomEvidence * 100).toFixed(0)}%</span>
-                    </div>
-                    <Progress value={explanation.visualBreakdown.bloomEvidence * 100} className="h-2" />
-                  </div>
-                  <div>
-                    <div className="flex justify-between text-xs mb-1">
-                      <span>Knowledge Type Evidence</span>
-                      <span>{(explanation.visualBreakdown.knowledgeEvidence * 100).toFixed(0)}%</span>
-                    </div>
-                    <Progress value={explanation.visualBreakdown.knowledgeEvidence * 100} className="h-2" />
-                  </div>
-                  <div>
-                    <div className="flex justify-between text-xs mb-1">
-                      <span>Structural Quality</span>
-                      <span>{(explanation.visualBreakdown.structuralEvidence * 100).toFixed(0)}%</span>
-                    </div>
-                    <Progress value={explanation.visualBreakdown.structuralEvidence * 100} className="h-2" />
-                  </div>
-                  <div>
-                    <div className="flex justify-between text-xs mb-1">
-                      <span>Contextual Indicators</span>
-                      <span>{(explanation.visualBreakdown.contextualEvidence * 100).toFixed(0)}%</span>
-                    </div>
-                    <Progress value={explanation.visualBreakdown.contextualEvidence * 100} className="h-2" />
-                  </div>
-                </div>
-              </div>
-            </CollapsibleContent>
-          </Collapsible>
         )}
 
         {/* Needs Review Alert */}
