@@ -1,5 +1,4 @@
 import { Card, CardContent, CardHeader, CardTitle } from "@/components/ui/card";
-import { Badge } from "@/components/ui/badge";
 import { Progress } from "@/components/ui/progress";
 import { CheckCircle, AlertTriangle, XCircle, TrendingUp, BookOpen, Tag, CircleCheck } from "lucide-react";
 import { SufficiencyAnalysis } from "@/services/analysis/sufficiencyAnalysis";
@@ -36,12 +35,6 @@ export function SufficiencyAnalysisPanel({ analysis }: SufficiencyAnalysisPanelP
             <TrendingUp className="w-5 h-5" />
             Question Bank Sufficiency Analysis
           </CardTitle>
-          <Badge 
-            variant={analysis.overallStatus === 'pass' ? 'default' : analysis.overallStatus === 'warning' ? 'secondary' : 'destructive'}
-            className="text-sm"
-          >
-            {analysis.overallStatus.toUpperCase()}
-          </Badge>
         </div>
       </CardHeader>
       <CardContent className="space-y-6">
@@ -71,6 +64,11 @@ export function SufficiencyAnalysisPanel({ analysis }: SufficiencyAnalysisPanelP
               {subject.totalAvailable} / {subject.totalRequired} questions
               {subject.gap > 0 && <span className="text-red-600 ml-2">Gap: {subject.gap}</span>}
             </p>
+            {subject.totalAvailable === 0 && (
+              <p className="text-xs text-muted-foreground mt-2">
+                No questions are currently available in the Question Bank for this subject. A value of 0 means that no questions are available, so the system will need to generate questions to complete the required number of items.
+              </p>
+            )}
           </div>
         )}
 

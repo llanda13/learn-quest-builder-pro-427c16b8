@@ -4,6 +4,7 @@ import { ConfidenceScorer, type ConfidenceResult } from '@/services/ai/confidenc
 import { TaxonomyMatrixService, type TaxonomyMatrix } from '@/services/ai/taxonomyMatrix';
 import { EdgeFunctions } from '@/services/edgeFunctions';
 import { supabase } from '@/integrations/supabase/client';
+import { normalizeKnowledgeDimension } from '@/types/knowledge';
 import { toast } from 'sonner';
 
 export interface ClassificationState {
@@ -216,7 +217,9 @@ export function useTaxonomyClassification(options: UseTaxonomyClassificationOpti
       await supabase.from('questions').update({
         cognitive_level: cognitiveLevel,
         bloom_level: cognitiveLevel, // Keep in sync
-        knowledge_dimension: validatedClassification.knowledge_dimension || originalClassification.knowledge_dimension,
+        knowledge_dimension: normalizeKnowledgeDimension(
+          validatedClassification.knowledge_dimension || originalClassification.knowledge_dimension
+        ),
         difficulty: validatedClassification.difficulty || originalClassification.difficulty,
         validation_status: 'validated',
         validated_by: user.id,

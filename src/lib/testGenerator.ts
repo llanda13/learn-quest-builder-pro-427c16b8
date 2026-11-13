@@ -1,6 +1,7 @@
 import { Questions, Tests, ActivityLog } from '@/services/db';
 import { generateAIQuestion, generateAIQuestionsForNeed, analyzeTopicCoverage } from './classify';
 import { shuffleExamChoices } from '@/utils/shuffleExamChoices';
+import { resolveGeneratedQuestionSubject, type SubjectMetadata } from '@/services/ai/subjectMetadataResolver';
 
 export type TestNeed = {
   topic: string;
@@ -23,6 +24,11 @@ export type TestConfiguration = {
   shuffle_choices: boolean;
   number_of_versions: number;
   tos_id?: string;
+  subject_no?: string;
+  academic_subject_id?: string;
+  subject_description?: string;
+  category?: string;
+  specialization?: string;
 };
 
 export type TestGenerationResult = {
@@ -112,7 +118,11 @@ export function buildEnhancedNeedsFromTOS(tosMatrix: any): TestNeed[] {
 /**
  * Fetch questions for specific needs with intelligent selection (avoids redundancy)
  */
-export async function fetchQuestionsForNeeds(needs: TestNeed[], approvedOnly: boolean = true): Promise<any[]> {
+export async function fetchQuestionsForNeeds(
+  needs: TestNeed[],
+  approvedOnly: boolean,
+  subjectMetadata: SubjectMetadata
+): Promise<any[]> {
   const { IntelligentSelector } = await import('@/services/testAssembly/intelligentSelector');
   
   // Build distribution requirements
@@ -135,7 +145,8 @@ export async function fetchQuestionsForNeeds(needs: TestNeed[], approvedOnly: bo
       topic: need.topic,
       bloom_level: need.bloom_level,
       difficulty: need.difficulty,
-      approved: approvedOnly
+      approved: approvedOnly,
+      subject_code: subjectMetadata.subject_code,
     });
     
     if (candidates) {
@@ -188,7 +199,15 @@ export async function fetchQuestionsForNeeds(needs: TestNeed[], approvedOnly: bo
           need.difficulty,
           needMore
         );
-        generatedQuestions.push(...aiQuestions);
+        generatedQuestions.push(...aiQuestions.map((question) => ({
+          ...question,
+          subject: `${subjectMetadata.subject_code} - ${subjectMetadata.subject_description}`,
+          category: subjectMetadata.category,
+          specialization: subjectMetadata.specialization,
+          subject_code: subjectMetadata.subject_code,
+          subject_description: subjectMetadata.subject_description,
+          metadata: { academic_subject_id: subjectMetadata.academic_subject_id },
+        })));
       }
     }
 
@@ -425,7 +444,15 @@ export async function generateTestFromTOS(
   // Build needs from TOS
   const needs = buildEnhancedNeedsFromTOS(tosMatrix);
   
-  const testQuestions = await fetchQuestionsForNeeds(needs, true);
+  const subjectMetadata = await resolveGeneratedQuestionSubject({
+    academic_subject_id: config.academic_subject_id,
+    subject: config.subject_no || config.subject,
+    subject_code: config.subject_no,
+    subject_description: config.subject_description,
+    category: config.category,
+    specialization: config.specialization,
+  }, config.tos_id);
+  const testQuestions = await fetchQuestionsForNeeds(needs, true, subjectMetadata);
   
   // Validate configuration
   const configErrors = validateTestConfig(config, testQuestions);

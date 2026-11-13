@@ -663,6 +663,7 @@ export type Database = {
           created_at: string
           created_by: string | null
           exam_period: string | null
+          format_id: string | null
           id: string
           instructions: string | null
           items: Json
@@ -694,6 +695,7 @@ export type Database = {
           created_at?: string
           created_by?: string | null
           exam_period?: string | null
+          format_id?: string | null
           id?: string
           instructions?: string | null
           items: Json
@@ -725,6 +727,7 @@ export type Database = {
           created_at?: string
           created_by?: string | null
           exam_period?: string | null
+          format_id?: string | null
           id?: string
           instructions?: string | null
           items?: Json

@@ -17,6 +17,31 @@ export interface ExamSection {
   essayCount?: number; // For essay sections: number of actual essay questions (items are grouped)
 }
 
+export interface EssayPromptGroup {
+  id: string;
+  number: number;
+  startNumber: number;
+  endNumber: number;
+}
+
+export function getEssayPromptGroup(section: ExamSection, itemNumber: number): EssayPromptGroup | undefined {
+  if (section.questionType !== 'essay' || !section.essayCount) return undefined;
+  const sectionSize = section.endNumber - section.startNumber + 1;
+  const groupCount = Math.min(section.essayCount, sectionSize);
+  const itemIndex = itemNumber - section.startNumber;
+  if (itemIndex < 0 || itemIndex >= sectionSize) return undefined;
+
+  const groupIndex = Math.min(groupCount - 1, Math.floor((itemIndex * groupCount) / sectionSize));
+  const startNumber = section.startNumber + Math.floor((groupIndex * sectionSize) / groupCount);
+  const endNumber = section.startNumber + Math.floor(((groupIndex + 1) * sectionSize) / groupCount) - 1;
+  return {
+    id: `${section.id}-essay-${groupIndex + 1}`,
+    number: groupIndex + 1,
+    startNumber,
+    endNumber
+  };
+}
+
 export interface ExamFormat {
   id: string;
   name: string;

@@ -1,6 +1,13 @@
 // Enhanced Supabase client with typed operations
 import { supabase } from "@/integrations/supabase/client";
 import { useToast } from "@/hooks/use-toast";
+import { normalizeKnowledgeDimension } from "@/types/knowledge";
+import {
+  assertSubjectAssignmentUnchanged,
+  mergeQuestionMetadata,
+  withCanonicalQuestionSubject,
+} from "@/services/db/questionSubjectMetadata";
+import type { Json } from "@/integrations/supabase/types";
 
 export interface Question {
   id?: string;
@@ -12,6 +19,12 @@ export interface Question {
   bloom_level: string;
   difficulty: string;
   knowledge_dimension: string;
+  category?: string;
+  specialization?: string;
+  subject?: string;
+  subject_code?: string;
+  subject_description?: string;
+  metadata?: Json;
   created_by: string;
   approved: boolean;
   confidence_score?: number;
@@ -67,13 +80,15 @@ export async function saveQuestion(question: Omit<Question, 'id' | 'owner' | 'cr
 
   const questionData = {
     ...question,
+    knowledge_dimension: normalizeKnowledgeDimension(question.knowledge_dimension),
     owner: user.id,
     approved: false
   };
+  const canonicalQuestion = await withCanonicalQuestionSubject(questionData);
 
   const { data, error } = await supabase
     .from('questions')
-    .insert(questionData)
+    .insert(canonicalQuestion)
     .select('*')
     .single();
 
@@ -82,9 +97,34 @@ export async function saveQuestion(question: Omit<Question, 'id' | 'owner' | 'cr
 }
 
 export async function updateQuestion(id: string, updates: Partial<Question>): Promise<Question> {
+  const subjectFieldsUpdated = ["category", "specialization", "subject", "subject_code", "subject_description"]
+    .some(field => Object.prototype.hasOwnProperty.call(updates, field));
+  const metadataUpdated = Object.prototype.hasOwnProperty.call(updates, "metadata");
+  let questionUpdates = updates;
+  if (Object.prototype.hasOwnProperty.call(updates, "knowledge_dimension")) {
+    questionUpdates = {
+      ...updates,
+      knowledge_dimension: normalizeKnowledgeDimension(updates.knowledge_dimension),
+    };
+  }
+  if (subjectFieldsUpdated || metadataUpdated) {
+    const { data: current, error: currentError } = await supabase
+      .from("questions")
+      .select("category, specialization, subject, subject_code, subject_description, metadata")
+      .eq("id", id)
+      .single();
+    if (currentError) throw currentError;
+    assertSubjectAssignmentUnchanged(current, updates);
+    questionUpdates = await withCanonicalQuestionSubject({
+      ...current,
+      ...questionUpdates,
+      metadata: mergeQuestionMetadata(current.metadata, updates.metadata),
+    });
+    assertSubjectAssignmentUnchanged(current, questionUpdates);
+  }
   const { data, error } = await supabase
     .from('questions')
-    .update(updates)
+    .update(questionUpdates)
     .eq('id', id)
     .select('*')
     .single();
@@ -277,13 +317,15 @@ export async function bulkInsertQuestions(questions: Array<Omit<Question, 'id' |
 
   const questionsData = questions.map(q => ({
     ...q,
+    knowledge_dimension: normalizeKnowledgeDimension(q.knowledge_dimension),
     owner: user.id,
     approved: false
   }));
+  const canonicalQuestions = await Promise.all(questionsData.map(withCanonicalQuestionSubject));
 
   const { data, error } = await supabase
     .from('questions')
-    .insert(questionsData)
+    .insert(canonicalQuestions)
     .select('*');
 
   if (error) throw error;

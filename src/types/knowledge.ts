@@ -9,6 +9,30 @@ export type KnowledgeDimension =
   | 'procedural'
   | 'metacognitive';
 
+const KNOWLEDGE_DIMENSIONS: readonly KnowledgeDimension[] = [
+  'factual',
+  'conceptual',
+  'procedural',
+  'metacognitive',
+];
+
+export function normalizeKnowledgeDimension(value: unknown): KnowledgeDimension {
+  if (typeof value !== 'string') {
+    throw new Error(
+      'Knowledge dimension is required. Choose factual, conceptual, procedural, or metacognitive.'
+    );
+  }
+
+  const normalized = value.trim().toLowerCase();
+  if (!KNOWLEDGE_DIMENSIONS.includes(normalized as KnowledgeDimension)) {
+    throw new Error(
+      'Unsupported knowledge dimension. Choose factual, conceptual, procedural, or metacognitive.'
+    );
+  }
+
+  return normalized as KnowledgeDimension;
+}
+
 /**
  * Answer Types - What kind of thinking the question demands
  * This is the key to preventing redundancy by design

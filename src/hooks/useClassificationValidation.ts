@@ -1,5 +1,6 @@
 import { useState, useCallback, useEffect } from 'react';
 import { supabase } from '@/integrations/supabase/client';
+import { normalizeKnowledgeDimension } from '@/types/knowledge';
 import { toast } from 'sonner';
 
 export interface ValidationQuestion {
@@ -206,7 +207,7 @@ export function useClassificationValidation() {
         .from('questions')
         .update({
           bloom_level: validatedClassification.bloom_level,
-          knowledge_dimension: validatedClassification.knowledge_dimension,
+          knowledge_dimension: normalizeKnowledgeDimension(validatedClassification.knowledge_dimension),
           difficulty: validatedClassification.difficulty,
           validation_status: 'validated',
           validated_by: user.id,

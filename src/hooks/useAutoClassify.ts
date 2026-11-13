@@ -6,7 +6,11 @@
  */
 
 import { useState, useCallback } from 'react';
-import type { KnowledgeDimension, KnowledgeClassificationResult } from '@/types/knowledge';
+import {
+  normalizeKnowledgeDimension,
+  type KnowledgeDimension,
+  type KnowledgeClassificationResult,
+} from '@/types/knowledge';
 import { determineKnowledgeDimension, quickClassifyKnowledgeDimension } from '@/services/analysis/knowledgeDeterminer';
 import { Questions } from '@/services/db/questions';
 
@@ -76,11 +80,17 @@ export function useAutoClassify(options: UseAutoClassifyOptions = {}) {
   const prepareQuestionWithClassification = useCallback(async <T extends { question_text: string; knowledge_dimension?: string }>(
     question: T
   ): Promise<T & { knowledge_dimension: KnowledgeDimension }> => {
-    if (!autoClassifyOnSave || question.knowledge_dimension) {
-      // Already has dimension or auto-classify disabled
+    if (question.knowledge_dimension) {
       return {
         ...question,
-        knowledge_dimension: (question.knowledge_dimension as KnowledgeDimension) || 'conceptual'
+        knowledge_dimension: normalizeKnowledgeDimension(question.knowledge_dimension)
+      };
+    }
+
+    if (!autoClassifyOnSave) {
+      return {
+        ...question,
+        knowledge_dimension: normalizeKnowledgeDimension(undefined)
       };
     }
 
