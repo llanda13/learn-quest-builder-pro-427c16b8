@@ -45,8 +45,6 @@ interface GenerationInput {
   allow_unapproved?: boolean;
   prefer_existing?: boolean;
   force_ai_generation?: boolean;
-  requested_question_type?: string;
-  existing_stems?: string[];
 }
 
 /**
@@ -486,7 +484,7 @@ function calculateQuestionTypeDistribution(totalItems: number): QuestionTypeDist
 /**
  * STEP 1: Lock the TOS and expand into slots with question types
  */
-function expandTOSToSlots(distributions: TopicDistribution[], totalItems: number, requestedQuestionType?: string): Slot[] {
+function expandTOSToSlots(distributions: TopicDistribution[], totalItems: number): Slot[] {
   const slots: Slot[] = [];
   let slotId = 1;
 
@@ -577,18 +575,6 @@ function expandTOSToSlots(distributions: TopicDistribution[], totalItems: number
             }
           }
           // MCQ: Default for everything else
-
-          // Honor the caller's requested question type (exam-format enforcement):
-          // per-slot generation requests must produce the section's type.
-          if (
-            requestedQuestionType === 'mcq' ||
-            requestedQuestionType === 'true_false' ||
-            requestedQuestionType === 'short_answer' ||
-            requestedQuestionType === 'essay'
-          ) {
-            questionType = requestedQuestionType as typeof questionType;
-            points = (POINTS as Record<string, number>)[requestedQuestionType] ?? points;
-          }
           
           const thisItem = slotId++;
           slots.push({
@@ -692,7 +678,8 @@ function expandTOSToSlots(distributions: TopicDistribution[], totalItems: number
 async function fillSlotsFromBank(
   slots: Slot[],
   registry: GenerationRegistry,
-  allowUnapproved: boolean
+  allowUnapproved: boolean,
+  subjectCode: string
 ): Promise<{ filled: Slot[]; unfilled: Slot[] }> {
   const filled: Slot[] = [];
   const unfilled: Slot[] = [];
@@ -719,6 +706,7 @@ async function fillSlotsFromBank(
       .eq('deleted', false)
       .eq('difficulty', difficulty)
       .eq('question_type', questionType)
+      .ilike('subject_code', subjectCode)
       .ilike('topic', `%${topic}%`)
       .in('bloom_level', bloomVariants)
       .order('used_count', { ascending: true });
@@ -1417,6 +1405,69 @@ function createFallbackQuestion(slot: Slot, reason: string, sequence: number): a
 /**
  * Validate question structure based on type
  */
+function validateQuestionStructure(question: any, questionType: string): boolean {
+  if (!question.question_text || question.question_text.length < 10) {
+    return false;
+  }
+
+  if (questionType === 'mcq') {
+    // RELAXED: accept if choices object exists with at least 2 options; downstream phase
+    // will backfill missing options and flag for review. This prevents over-rejection
+    // from blocking TOS completion.
+    let choices = question.choices;
+    if (!choices || typeof choices !== 'object') {
+      if (Array.isArray((question as any).options) && (question as any).options.length >= 2) {
+        choices = {};
+        ['A', 'B', 'C', 'D'].forEach((k, i) => {
+          if ((question as any).options[i]) choices[k] = String((question as any).options[i]);
+        });
+        question.choices = choices;
+      } else {
+        console.warn('MCQ missing choices object');
+        return false;
+      }
+    }
+    const optionCount = ['A', 'B', 'C', 'D'].filter(
+      key => choices[key] && typeof choices[key] === 'string' && choices[key].trim().length > 0
+    ).length;
+    if (optionCount < 2) {
+      console.warn('MCQ has fewer than 2 options');
+      return false;
+    }
+    // Invalid answer keys are unrecoverable at validation time; never default
+    // to A because that reintroduces structural answer-key bias.
+    if (!['A', 'B', 'C', 'D'].includes(question.correct_answer)) {
+      console.warn(`MCQ has invalid correct_answer: ${question.correct_answer}`);
+      return false;
+    }
+  }
+
+  if (questionType === 'true_false') {
+    // ENFORCE: correct_answer must be "True" or "False"
+    if (!['True', 'False', 'true', 'false'].includes(String(question.correct_answer))) {
+      console.warn(`T/F has invalid correct_answer: ${question.correct_answer}`);
+      return false;
+    }
+  }
+
+  if (questionType === 'short_answer') {
+    // ENFORCE: Must have a correct_answer or model answer
+    if (!question.correct_answer && !question.answer) {
+      console.warn('Short answer missing correct_answer');
+      return false;
+    }
+  }
+
+  if (questionType === 'essay') {
+    // Essay should have rubric or model answer
+    if (!question.answer && !question.rubric) {
+      console.warn('Essay missing model answer or rubric');
+      // Don't reject, just warn - essays are harder to generate
+    }
+  }
+
+  return true;
+}
 
 function selectNextConcept(registry: GenerationRegistry, topic: string): string {
   const used = registry.usedConcepts[topic] || [];
@@ -2362,6 +2413,7 @@ interface ValidationCheck {
   uniqueness: boolean;
   quality: boolean;
   specificity: boolean;
+  routing?: boolean;
 }
 
 interface ValidationResult {
@@ -2530,47 +2582,92 @@ serve(async (req) => {
     console.log(`📊 Total items requested: ${body.total_items}`);
     console.log(`📚 Topics: ${body.distributions.map(d => d.topic).join(', ')}`);
 
-    // Seed the dedup blacklist with stems already accepted by the caller so
-    // per-slot retry requests cannot regenerate previously accepted questions.
-    const seededStems = Array.isArray(body.existing_stems)
-      ? body.existing_stems
-          .filter((s): s is string => typeof s === 'string' && s.trim().length > 0)
-          .slice(0, 400)
-      : [];
-
     const registry: GenerationRegistry = {
       usedConcepts: {},
       usedOperations: {},
       usedPairs: [],
-      usedQuestionTexts: seededStems.map(s => s.toLowerCase()),
-      compiledItemStems: [...seededStems]
+      usedQuestionTexts: [],
+      compiledItemStems: []
     };
 
-    if (seededStems.length > 0) {
-      console.log(`🚫 Seeded dedup blacklist with ${seededStems.length} previously accepted stem(s)`);
-    }
-
     // STEP 1: Expand TOS into slots with question types
-    const allSlots = expandTOSToSlots(body.distributions, body.total_items, body.requested_question_type);
+    const allSlots = expandTOSToSlots(body.distributions, body.total_items);
 
-    // STEP 1b: Load TOS metadata so we can re-inject SUBJECT CONTEXT into every batch
-    // (prevents AI drift on technical subjects during long generation runs)
-    let subjectCtx: SubjectContext | undefined;
+    // Load the registered subject from the active TOS before generation.
+    let subjectCtx: SubjectContext;
+    let canonicalSubject: {
+      id: string;
+      code: string;
+      description: string;
+      category: string;
+      specialization: string;
+    };
+    let tosRow: { subject_no: string; course: string; description: string };
     try {
-      const { data: tosRow } = await supabase
+      const { data: loadedTos, error: tosError } = await supabase
         .from('tos_entries')
         .select('subject_no, course, description')
         .eq('id', body.tos_id)
         .maybeSingle();
+      if (tosError) throw tosError;
+      if (!loadedTos?.subject_no?.trim()) {
+        throw new Error('The active TOS has no subject code.');
+      }
+
+      const { data: subjects, error: subjectError } = await supabase
+        .from('academic_subjects')
+        .select('id, code, description, specialization_id')
+        .ilike('code', loadedTos.subject_no.trim())
+        .eq('deleted', false);
+      if (subjectError) throw subjectError;
+
+      const normalized = (value: string | null | undefined) => (value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+      let candidates = subjects || [];
+      if (candidates.length > 1) {
+        const officialDescription = normalized(loadedTos.description) || normalized(loadedTos.course);
+        candidates = candidates.filter(subject => normalized(subject.description) === officialDescription);
+      }
+      if (candidates.length !== 1) {
+        throw new Error(`TOS subject "${loadedTos.subject_no}" does not resolve to exactly one registered academic subject.`);
+      }
+
+      const { data: specialization, error: specializationError } = await supabase
+        .from('academic_specializations')
+        .select('id, name, category_id')
+        .eq('id', candidates[0].specialization_id)
+        .eq('deleted', false)
+        .single();
+      if (specializationError) throw specializationError;
+
+      const { data: category, error: categoryError } = await supabase
+        .from('academic_categories')
+        .select('name')
+        .eq('id', specialization.category_id)
+        .eq('deleted', false)
+        .single();
+      if (categoryError) throw categoryError;
+
+      tosRow = loadedTos;
+      canonicalSubject = {
+        id: candidates[0].id,
+        code: candidates[0].code,
+        description: candidates[0].description,
+        category: category.name,
+        specialization: specialization.name,
+      };
       subjectCtx = buildSubjectContext(
-        tosRow?.subject_no || '',
-        tosRow?.course || '',
-        tosRow?.description || '',
+        canonicalSubject.code,
+        tosRow.course || '',
+        canonicalSubject.description,
         body.distributions.map(d => d.topic)
       );
       console.log(`🎓 Subject anchor: code="${subjectCtx.subjectCode}" course="${subjectCtx.courseName}" technical=${subjectCtx.isTechnical} keywords=[${subjectCtx.technicalKeywords.slice(0, 8).join(', ')}]`);
     } catch (e) {
-      console.warn('Could not load TOS metadata for subject anchor:', e);
+      const message = e instanceof Error ? e.message : 'Unable to resolve the TOS academic subject.';
+      return new Response(JSON.stringify({ error: message }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
     }
 
     let bankFilled: Slot[] = [];
@@ -2580,7 +2677,8 @@ serve(async (req) => {
       const bankResult = await fillSlotsFromBank(
         allSlots,
         registry,
-        body.allow_unapproved ?? false
+        body.allow_unapproved ?? false,
+        canonicalSubject.code
       );
       bankFilled = bankResult.filled;
       unfilled = bankResult.unfilled;
@@ -2860,10 +2958,23 @@ serve(async (req) => {
 
     // Verify we have exactly the required count
     if (trimmedQuestions.length !== requiredTotal || trimmedQuestions.some(q => !q)) {
-      const filledCount = trimmedQuestions.filter(Boolean).length;
       throw new Error(
-        `Final validation failed: ${requiredTotal - filledCount} of ${requiredTotal} slots unfilled (filled ${filledCount}). Test was not saved.`
+        `Final validation failed: expected ${requiredTotal} questions, got ${trimmedQuestions.filter(Boolean).length}`
       );
+    }
+
+    for (const question of trimmedQuestions) {
+      question.category = canonicalSubject.category;
+      question.specialization = canonicalSubject.specialization;
+      question.subject = `${canonicalSubject.code} - ${canonicalSubject.description}`;
+      question.subject_code = canonicalSubject.code;
+      question.subject_description = canonicalSubject.description;
+      question.tos_id = body.tos_id;
+      question.metadata = {
+        ...(question.metadata || {}),
+        academic_subject_id: canonicalSubject.id,
+        tos_id: body.tos_id,
+      };
     }
 
     

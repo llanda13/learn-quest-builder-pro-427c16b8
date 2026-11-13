@@ -590,7 +590,8 @@ serve(async (req) => {
       question_type = 'mcq',
       intents,
       pipeline_mode,
-      registry_snapshot // NEW: Receive registry state
+      registry_snapshot,
+      regeneration_context
     } = await req.json();
 
     if (!topic || !bloom_level || !knowledge_dimension) {
@@ -643,9 +644,34 @@ serve(async (req) => {
     };
 
     // Build prompt based on pipeline mode
-    const prompt = isIntentDriven
+    const basePrompt = isIntentDriven
       ? buildIntentDrivenPrompt(topic, bloom_level, knowledge_dimension, difficulty, intents, registry, isMCQ)
       : buildLegacyPromptMultiType(topic, bloom_level, knowledge_dimension, difficulty, count, question_type);
+    const rejectedQuestions = Array.isArray(regeneration_context?.rejected_questions)
+      ? regeneration_context.rejected_questions
+      : [];
+    const regenerationPrompt = regeneration_context
+      ? `
+
+=== SLOT-LOCKED REGENERATION ===
+Fill question number ${regeneration_context.question_number} only.
+Required type: ${regeneration_context.question_type || question_type}.
+Required topic: ${regeneration_context.topic || topic}.
+Required Bloom level: ${regeneration_context.bloom_level || bloom_level}.
+Required difficulty: ${regeneration_context.difficulty || difficulty}.
+Required knowledge dimension: ${regeneration_context.knowledge_dimension || knowledge_dimension}.
+${regeneration_context.essay_prompt_group_id
+  ? `This is response slot ${regeneration_context.question_number} within shared Essay Prompt ${regeneration_context.essay_prompt_number}, covering item numbers ${regeneration_context.essay_prompt_start_number}-${regeneration_context.essay_prompt_end_number}. Keep this response slot distinct and aligned to its own TOS metadata.`
+  : ''}
+Keep every requirement above unchanged. Do not change the question type to make the Bloom level easier.
+The following candidates were rejected; do NOT repeat them or merely reword them. Change the specific learning objective, scenario, and expected answer while staying within the same assigned topic and cognitive requirements:
+${rejectedQuestions.map((entry: any, index: number) =>
+  `${index + 1}. Rejected question: "${String(entry.question || '').slice(0, 500)}" | Reason: ${String(entry.reason || 'Rejected by final format or duplicate validation.').slice(0, 300)}`
+).join('\n')}
+Return only a replacement satisfying the original output schema.
+=== END SLOT-LOCKED REGENERATION ===`
+      : '';
+    const prompt = `${basePrompt}${regenerationPrompt}`;
 
     const systemPrompt = isIntentDriven
       ? `You are an expert educational content RENDERER implementing a constrained question generation pipeline. You do NOT make creative decisions. All structural decisions (concept, operation, answer type) have been made for you. Your ONLY job is to render questions that exactly match the assigned constraints. If you cannot satisfy a constraint, you MUST return an error rather than deviate.`

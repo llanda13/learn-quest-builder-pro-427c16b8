@@ -1,5 +1,6 @@
 import { serve } from "https://deno.land/std@0.168.0/http/server.ts";
 import { createClient } from "https://esm.sh/@supabase/supabase-js@2.49.1";
+import { normalizeKnowledgeDimension } from "../../../src/types/knowledge.ts";
 
 const corsHeaders = {
   'Access-Control-Allow-Origin': '*',
@@ -85,9 +86,9 @@ serve(async (req) => {
     const { tos_id, request } = await req.json();
     
     // Validate input
-    if (!tos_id || !request) {
+    if (!request || (!tos_id && !request.subject_code)) {
       return new Response(
-        JSON.stringify({ error: 'Missing required fields: tos_id and request' }),
+        JSON.stringify({ error: 'Provide a registered subject_code or an active tos_id, together with request.' }),
         { status: 400, headers: { ...corsHeaders, 'Content-Type': 'application/json' } }
       );
     }
@@ -115,6 +116,99 @@ serve(async (req) => {
       Deno.env.get('SUPABASE_URL')!,
       Deno.env.get('SUPABASE_SERVICE_ROLE_KEY')!
     );
+
+    const normalizeSubject = (value: string | null | undefined) => (value || '').trim().replace(/\s+/g, ' ').toLowerCase();
+    let tosRow: { subject_no: string; course: string; description: string } | null = null;
+    if (tos_id) {
+      const { data, error: tosError } = await supabase
+        .from('tos_entries')
+        .select('subject_no, course, description')
+        .eq('id', tos_id)
+        .maybeSingle();
+      if (tosError) throw tosError;
+      tosRow = data;
+      if (!tosRow) {
+        return new Response(JSON.stringify({ error: `TOS "${tos_id}" was not found.` }), {
+          status: 400,
+          headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+        });
+      }
+    }
+    const requestedSubjectCode = tosRow?.subject_no?.trim() || request.subject_code?.trim();
+    if (!requestedSubjectCode) {
+      return new Response(JSON.stringify({ error: 'The active TOS has no subject code.' }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+    if (tosRow?.subject_no?.trim() && request.subject_code?.trim()
+      && normalizeSubject(tosRow.subject_no) !== normalizeSubject(request.subject_code)) {
+      return new Response(JSON.stringify({ error: 'Requested subject code conflicts with the active TOS subject.' }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+
+    const { data: subjectRows, error: subjectsError } = await supabase
+      .from('academic_subjects')
+      .select('id, code, description, specialization_id')
+      .ilike('code', requestedSubjectCode)
+      .eq('deleted', false);
+    if (subjectsError) throw subjectsError;
+    let subjectMatches = subjectRows || [];
+    if (subjectMatches.length > 1) {
+      const officialDescriptions = [
+        normalizeSubject(request.subject_description),
+        normalizeSubject(tosRow?.course),
+        normalizeSubject(tosRow?.description),
+      ].filter(Boolean);
+      subjectMatches = subjectMatches.filter(subject => officialDescriptions.includes(normalizeSubject(subject.description)));
+    }
+    if (subjectMatches.length !== 1) {
+      return new Response(JSON.stringify({ error: `Subject code "${requestedSubjectCode}" does not resolve to exactly one registered academic subject.` }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+    const { data: specialization, error: specializationError } = await supabase
+      .from('academic_specializations')
+      .select('name, category_id')
+      .eq('id', subjectMatches[0].specialization_id)
+      .eq('deleted', false)
+      .single();
+    if (specializationError) throw specializationError;
+    const { data: category, error: categoryError } = await supabase
+      .from('academic_categories')
+      .select('name')
+      .eq('id', specialization.category_id)
+      .eq('deleted', false)
+      .single();
+    if (categoryError) throw categoryError;
+    if (request.subject_description && normalizeSubject(request.subject_description) !== normalizeSubject(subjectMatches[0].description)) {
+      return new Response(JSON.stringify({ error: `Subject description does not match registered subject "${subjectMatches[0].code}".` }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+    if (request.category && normalizeSubject(request.category) !== normalizeSubject(category.name)) {
+      return new Response(JSON.stringify({ error: `Category does not match registered subject "${subjectMatches[0].code}".` }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+    if (request.specialization && normalizeSubject(request.specialization) !== normalizeSubject(specialization.name)) {
+      return new Response(JSON.stringify({ error: `Specialization does not match registered subject "${subjectMatches[0].code}".` }), {
+        status: 400,
+        headers: { ...corsHeaders, 'Content-Type': 'application/json' }
+      });
+    }
+    const canonicalSubject = {
+      id: subjectMatches[0].id,
+      code: subjectMatches[0].code,
+      description: subjectMatches[0].description,
+      specialization: specialization.name,
+      category: category.name,
+    };
 
     // Get OpenAI API key
     const openAIApiKey = Deno.env.get('OPENAI_API_KEY');
@@ -264,7 +358,7 @@ Return a JSON object with an "items" array containing questions in this exact fo
 
     // Prepare questions for database insertion
     const questionsToInsert = validQuestions.map((q: any) => ({
-      tos_id,
+      tos_id: tos_id || null,
       topic,
       question_text: q.text,
       question_type: 'multiple-choice',
@@ -272,11 +366,17 @@ Return a JSON object with an "items" array containing questions in this exact fo
       correct_answer: q.correct_answer,
       bloom_level: q.bloom_level || bloom_level,
       difficulty: q.difficulty || difficulty,
-      knowledge_dimension: q.knowledge_dimension || 'Conceptual',
+      knowledge_dimension: normalizeKnowledgeDimension(q.knowledge_dimension),
+      subject: `${canonicalSubject.code} - ${canonicalSubject.description}`,
+      subject_code: canonicalSubject.code,
+      subject_description: canonicalSubject.description,
+      category: canonicalSubject.category,
+      specialization: canonicalSubject.specialization,
       created_by: 'ai',
       approved: false,
       confidence_score: 0.8,
-      owner: userId
+      owner: userId,
+      metadata: { academic_subject_id: canonicalSubject.id, tos_id: tos_id || null }
     }));
 
     // Insert questions into database
