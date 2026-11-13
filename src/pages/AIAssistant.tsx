@@ -10,6 +10,8 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { useToast } from "@/hooks/use-toast";
 import { useAuth } from "@/lib/auth";
 import { useUserRole } from "@/hooks/useUserRole";
+import { useAcademicHierarchy } from "@/hooks/useAcademicHierarchy";
+import { Questions } from "@/services/db/questions";
 import { supabase } from "@/integrations/supabase/client";
 import {
   Brain, Send, Loader2, User, Trash2, Sparkles, FileQuestion,
@@ -18,6 +20,7 @@ import {
   MessageSquare, Clock, Plus, FileText, Target, Lightbulb, ListChecks
 } from "lucide-react";
 import ReactMarkdown from "react-markdown";
+import { normalizeKnowledgeDimension } from "@/types/knowledge";
 
 // ─── Types ───
 type IntentType = "generate_questions" | "classify_question" | "assign_topic" | "improve_question" | "system_stats" | "explain_concept" | "general_academic";
@@ -47,6 +50,7 @@ interface GeneratedQuestion {
   difficulty: string;
   bloom_level: string;
   topic: string;
+  knowledge_dimension?: string;
   specialization?: string;
   ai_generated?: boolean;
 }
@@ -97,6 +101,7 @@ export default function AIAssistant() {
   const { toast } = useToast();
   const { user } = useAuth();
   const { isAdmin } = useUserRole();
+  const hierarchy = useAcademicHierarchy();
 
   // Generate form state
   const [genTopic, setGenTopic] = useState("");
@@ -104,6 +109,8 @@ export default function AIAssistant() {
   const [genCount, setGenCount] = useState("5");
   const [genDifficulty, setGenDifficulty] = useState("average");
   const [genBloom, setGenBloom] = useState("understanding");
+  const [genSubjectId, setGenSubjectId] = useState("");
+  const generatedSubject = hierarchy.allSubjects.find(subject => subject.id === genSubjectId);
 
   useEffect(() => {
     if (scrollRef.current) scrollRef.current.scrollTop = scrollRef.current.scrollHeight;
@@ -347,25 +354,33 @@ export default function AIAssistant() {
   // ─── Save question ───
   const saveQuestion = async (question: GeneratedQuestion, index: number) => {
     if (!user) return;
+    if (!generatedSubject) {
+      toast({ title: "Subject required", description: "Select a registered academic subject before saving generated questions.", variant: "destructive" });
+      return;
+    }
     setSavingQuestions(prev => new Set(prev).add(index));
     try {
-      const { error } = await supabase.from("questions").insert({
+      await Questions.create({
         question_text: question.question_text,
         question_type: question.question_type,
         choices: question.choices || null,
         correct_answer: question.correct_answer,
         difficulty: question.difficulty,
         bloom_level: question.bloom_level,
+        knowledge_dimension: normalizeKnowledgeDimension(question.knowledge_dimension),
         cognitive_level: question.bloom_level,
         topic: question.topic,
-        specialization: question.specialization || "",
+        category: generatedSubject.category_name || "",
+        specialization: generatedSubject.specialization_name || "",
+        subject: `${generatedSubject.code} - ${generatedSubject.description}`,
+        subject_code: generatedSubject.code,
+        subject_description: generatedSubject.description,
         created_by: user.id,
         owner: user.id,
         approved: true,
         ai_confidence_score: 0.85,
-        metadata: { ai_generated: true, source: "ai_assistant" } as any,
+        metadata: { ai_generated: true, source: "ai_assistant", academic_subject_id: generatedSubject.id },
       });
-      if (error) throw error;
       toast({ title: "Saved!", description: "Question saved to Question Bank." });
     } catch (err: any) {
       toast({ title: "Save Failed", description: err.message, variant: "destructive" });
@@ -376,16 +391,25 @@ export default function AIAssistant() {
 
   const saveAllQuestions = async (questions: GeneratedQuestion[]) => {
     if (!user) return;
+    if (!generatedSubject) {
+      toast({ title: "Subject required", description: "Select a registered academic subject before saving generated questions.", variant: "destructive" });
+      return;
+    }
     try {
       const toSave = questions.map(q => ({
         question_text: q.question_text, question_type: q.question_type, choices: q.choices || null,
         correct_answer: q.correct_answer, difficulty: q.difficulty, bloom_level: q.bloom_level,
-        cognitive_level: q.bloom_level, topic: q.topic, specialization: q.specialization || "",
+        cognitive_level: q.bloom_level, topic: q.topic,
+        knowledge_dimension: normalizeKnowledgeDimension(q.knowledge_dimension),
+        category: generatedSubject.category_name || "",
+        specialization: generatedSubject.specialization_name || "",
+        subject: `${generatedSubject.code} - ${generatedSubject.description}`,
+        subject_code: generatedSubject.code,
+        subject_description: generatedSubject.description,
         created_by: user.id, owner: user.id, approved: true, ai_confidence_score: 0.85,
-        metadata: { ai_generated: true, source: "ai_assistant" } as any,
+        metadata: { ai_generated: true, source: "ai_assistant", academic_subject_id: generatedSubject.id },
       }));
-      const { error } = await supabase.from("questions").insert(toSave);
-      if (error) throw error;
+      await Questions.bulkInsert(toSave);
       toast({ title: "All Saved!", description: `${questions.length} questions saved to Question Bank.` });
     } catch (err: any) {
       toast({ title: "Save Failed", description: err.message, variant: "destructive" });
@@ -395,7 +419,8 @@ export default function AIAssistant() {
   // ─── Generate form submit ───
   const handleGenerateSubmit = () => {
     if (!genTopic.trim()) { toast({ title: "Missing topic", description: "Please enter a topic.", variant: "destructive" }); return; }
-    const prompt = `Generate ${genCount} ${genType.replace(/_/g, " ")} questions about "${genTopic}" at ${genDifficulty} difficulty level, targeting ${genBloom} Bloom's level.`;
+    if (!generatedSubject) { toast({ title: "Subject required", description: "Select a registered academic subject before generating questions.", variant: "destructive" }); return; }
+    const prompt = `Generate ${genCount} ${genType.replace(/_/g, " ")} questions for ${generatedSubject.code} - ${generatedSubject.description} about "${genTopic}" at ${genDifficulty} difficulty level, targeting ${genBloom} Bloom's level.`;
     sendMessage(prompt, "generate_questions");
   };
 
@@ -635,6 +660,19 @@ export default function AIAssistant() {
                       </CardTitle>
                     </CardHeader>
                     <CardContent className="space-y-4">
+                      <div className="space-y-2">
+                        <label className="text-sm font-medium">Registered subject *</label>
+                        <Select value={genSubjectId} onValueChange={setGenSubjectId}>
+                          <SelectTrigger><SelectValue placeholder="Select an academic subject" /></SelectTrigger>
+                          <SelectContent>
+                            {hierarchy.allSubjects.map(subject => (
+                              <SelectItem key={subject.id} value={subject.id}>
+                                {subject.code} - {subject.description}
+                              </SelectItem>
+                            ))}
+                          </SelectContent>
+                        </Select>
+                      </div>
                       <div className="space-y-2">
                         <label className="text-sm font-medium">Topic *</label>
                         <Input value={genTopic} onChange={(e) => setGenTopic(e.target.value)} placeholder="e.g., Photosynthesis, Data Structures" />

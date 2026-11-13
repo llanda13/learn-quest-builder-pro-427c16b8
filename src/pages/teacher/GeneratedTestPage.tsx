@@ -36,57 +36,109 @@ interface TestItem {
   difficulty?: string;
   bloom_level?: string;
   topic?: string;
+  question_number?: number;
+  section_id?: string;
+  section_label?: string;
+  section_title?: string;
+  section_instruction?: string;
+  essay_prompt_group_id?: string;
+  essay_prompt_number?: number;
+  essay_prompt_start_number?: number;
+  essay_prompt_end_number?: number;
   /** Original position inside test.items — used for editing. */
   __idx?: number;
 }
 
-interface GroupedQuestions {
-  mcq: TestItem[];
-  secondary: TestItem[];
-  essay: TestItem[];
-  secondaryType: 'true_false' | 'short_answer' | null;
+interface GroupedSection {
+  id: string;
+  title: string;
+  instruction: string;
+  startNumber: number;
+  kind: string;
+  items: TestItem[];
 }
 
-function groupQuestionsByType(items: TestItem[]): GroupedQuestions {
-  const mcq: TestItem[] = [];
-  const trueFalse: TestItem[] = [];
-  const shortAnswer: TestItem[] = [];
-  const essay: TestItem[] = [];
+function classifySectionType(type: string): string {
+  if (['mcq', 'multiple-choice', 'multiple_choice', 'multiple choice'].includes(type)) return 'mcq';
+  if (['true_false', 'true-false', 'truefalse', 'true/false'].includes(type)) return 'true_false';
+  if (['short_answer', 'fill-blank', 'fill_blank', 'identification'].includes(type)) return 'fill_blank';
+  if (type === 'essay') return 'essay';
+  return type || 'unknown';
+}
+
+function defaultSectionMeta(kind: string): { title: string; instruction: string } {
+  switch (kind) {
+    case 'mcq':
+      return { title: 'Multiple Choice', instruction: 'Choose the best answer from the options provided.' };
+    case 'true_false':
+      return { title: 'True or False', instruction: 'Write TRUE if the statement is correct, FALSE if it is incorrect.' };
+    case 'fill_blank':
+      return { title: 'Fill in the Blank', instruction: 'Write the correct answer on the blank provided.' };
+    case 'essay':
+      return { title: 'Essay', instruction: 'Answer the following questions in complete sentences.' };
+    default:
+      return { title: 'Questions', instruction: 'Answer each question.' };
+  }
+}
+
+function groupQuestionsBySection(items: TestItem[]): GroupedSection[] {
+  const hasSectionMetadata = items.some((item) => item.section_id || item.section_label);
+  const groups = new Map<string, {
+    id: string;
+    title: string;
+    instruction: string;
+    kind: string;
+    items: TestItem[];
+    firstIndex: number;
+  }>();
 
   items.forEach((raw, originalIndex) => {
     const item = { ...raw, __idx: originalIndex };
-    const type = (item.question_type || item.type || '').toLowerCase();
-    if (type === 'mcq' || type === 'multiple-choice' || type === 'multiple_choice') {
-      mcq.push(item);
-    } else if (type === 'true_false' || type === 'true-false' || type === 'truefalse') {
-      trueFalse.push(item);
-    } else if (type === 'short_answer' || type === 'fill-blank' || type === 'fill_blank' || type === 'identification') {
-      shortAnswer.push(item);
-    } else if (type === 'essay') {
-      essay.push(item);
+    const kind = classifySectionType((item.question_type || item.type || '').toLowerCase());
+    const key = hasSectionMetadata
+      ? item.section_id || item.section_label || `type-${kind}`
+      : `type-${kind}`;
+    const fallback = defaultSectionMeta(kind);
+    let group = groups.get(key);
+    if (!group) {
+      const sectionIndex = groups.size;
+      const legacyLabel = `Section ${String.fromCharCode(65 + sectionIndex)}`;
+      const label = hasSectionMetadata ? item.section_label : legacyLabel;
+      const sectionTitle = hasSectionMetadata ? item.section_title : fallback.title;
+      group = {
+        id: key,
+        title: label ? `${label}: ${sectionTitle || fallback.title}` : sectionTitle || fallback.title,
+        instruction: item.section_instruction || fallback.instruction,
+        kind,
+        items: [],
+        firstIndex: originalIndex
+      };
+      groups.set(key, group);
     }
+    group.items.push(item);
   });
 
-  let secondaryType: 'true_false' | 'short_answer' | null = null;
-  let secondary: TestItem[] = [];
-  
-  if (trueFalse.length > 0 && shortAnswer.length === 0) {
-    secondaryType = 'true_false';
-    secondary = trueFalse;
-  } else if (shortAnswer.length > 0 && trueFalse.length === 0) {
-    secondaryType = 'short_answer';
-    secondary = shortAnswer;
-  } else if (trueFalse.length > 0 && shortAnswer.length > 0) {
-    if (trueFalse.length >= shortAnswer.length) {
-      secondaryType = 'true_false';
-      secondary = trueFalse;
-    } else {
-      secondaryType = 'short_answer';
-      secondary = shortAnswer;
-    }
-  }
-
-  return { mcq, secondary, essay, secondaryType };
+  let nextNumber = 1;
+  return [...groups.values()]
+    .sort((left, right) => left.firstIndex - right.firstIndex)
+    .map((group) => {
+      group.items.sort((left, right) =>
+        (left.question_number ?? left.__idx ?? 0) - (right.question_number ?? right.__idx ?? 0)
+      );
+      const explicitNumbers = group.items
+        .map((item) => item.question_number)
+        .filter((number): number is number => typeof number === 'number');
+      const startNumber = explicitNumbers.length ? Math.min(...explicitNumbers) : nextNumber;
+      nextNumber = startNumber + group.items.length;
+      return {
+        id: group.id,
+        title: group.title,
+        instruction: group.instruction,
+        startNumber,
+        kind: group.kind,
+        items: group.items
+      };
+    });
 }
 
 const EDITABLE_STATUSES = ["draft", "revision_requested"];
@@ -396,27 +448,10 @@ export default function GeneratedTestPage() {
 
   const items: TestItem[] = Array.isArray(test.items) ? test.items : [];
   const totalPoints = items.reduce((sum, item) => sum + (item.points || 1), 0);
-  const groupedQuestions = groupQuestionsByType(items);
+  const groupedSections = groupQuestionsBySection(items);
+  const hasSectionMetadata = items.some((item) => item.section_id || item.section_label);
   const isDraft = test.validation_status === "draft";
   const isEditable = EDITABLE_STATUSES.includes(test.validation_status);
-
-  const mcqStart = 1;
-  const secondaryStart = mcqStart + groupedQuestions.mcq.length;
-  const essayStart = secondaryStart + groupedQuestions.secondary.length;
-
-  const getSectionBTitle = () => {
-    if (groupedQuestions.secondaryType === 'true_false') {
-      return "Section B: True or False";
-    }
-    return "Section B: Fill in the Blank / Short Answer";
-  };
-
-  const getSectionBInstruction = () => {
-    if (groupedQuestions.secondaryType === 'true_false') {
-      return "Write TRUE if the statement is correct, FALSE if incorrect.";
-    }
-    return "Write the correct answer on the blank provided.";
-  };
 
   return (
     <>
@@ -673,45 +708,22 @@ export default function GeneratedTestPage() {
 
           <Separator />
 
-          {/* Questions - 3 Sections */}
+          {/* Questions follow the generated format's stored section boundaries. */}
           <div className="space-y-8">
-            {groupedQuestions.mcq.length > 0 && (
+            {groupedSections.map((section) => (
               <QuestionSection
-                title="Section A: Multiple Choice Questions"
-                instruction="Choose the best answer from the options provided. Write the letter of your answer on the space provided."
-                items={groupedQuestions.mcq}
-                startNumber={mcqStart}
+                key={section.id}
+                title={section.title}
+                instruction={section.instruction}
+                items={section.items}
+                startNumber={section.startNumber}
                 showAnswer={showAnswerKey}
-                editable={isEditable}
-                onEdit={openQuestionEditor}
-              />
-            )}
-            
-            {groupedQuestions.secondary.length > 0 && (
-              <QuestionSection
-                title={getSectionBTitle()}
-                instruction={getSectionBInstruction()}
-                items={groupedQuestions.secondary}
-                startNumber={secondaryStart}
-                showAnswer={showAnswerKey}
-                editable={isEditable}
-                onEdit={openQuestionEditor}
-              />
-            )}
-            
-          {groupedQuestions.essay.length > 0 && (
-              <QuestionSection
-                title="Section C: Essay Questions"
-                instruction="Answer the following questions in complete sentences. Provide clear and concise explanations."
-                items={groupedQuestions.essay}
-                startNumber={essayStart}
-                showAnswer={showAnswerKey}
-                isEssaySection
+                isEssaySection={!hasSectionMetadata && section.kind === 'essay'}
                 totalTestItems={items.length}
                 editable={isEditable}
                 onEdit={openQuestionEditor}
               />
-            )}
+            ))}
           </div>
         </CardContent>
       </Card>
@@ -727,19 +739,16 @@ export default function GeneratedTestPage() {
           </CardHeader>
           <CardContent>
             <div className="space-y-4">
-              {groupedQuestions.mcq.length > 0 && (
-                <AnswerKeySection title="Multiple Choice" items={groupedQuestions.mcq} startNumber={mcqStart} />
-              )}
-              {groupedQuestions.secondary.length > 0 && (
-                <AnswerKeySection 
-                  title={groupedQuestions.secondaryType === 'true_false' ? 'True/False' : 'Short Answer'} 
-                  items={groupedQuestions.secondary} 
-                  startNumber={secondaryStart} 
+              {groupedSections.map((section) => (
+                <AnswerKeySection
+                  key={section.id}
+                  title={section.title}
+                  items={section.items}
+                  startNumber={section.startNumber}
+                  isEssaySection={!hasSectionMetadata && section.kind === 'essay'}
+                  totalTestItems={items.length}
                 />
-              )}
-            {groupedQuestions.essay.length > 0 && (
-                <AnswerKeySection title="Essay" items={groupedQuestions.essay} startNumber={essayStart} isEssaySection totalTestItems={items.length} />
-              )}
+              ))}
             </div>
           </CardContent>
         </Card>
@@ -943,19 +952,29 @@ function QuestionSection({
       </div>
       <div className="space-y-4">
         {items.map((item, index) => {
+          const number = item.question_number ?? startNumber + index;
           const displayNumber = isEssaySection 
             ? getEssayDisplayNumber(index, items, startNumber, totalTestItems)
-            : `${startNumber + index}`;
+            : `${number}`;
+          const previousItem = items[index - 1];
+          const startsEssayPrompt = item.essay_prompt_group_id &&
+            item.essay_prompt_group_id !== previousItem?.essay_prompt_group_id;
           return (
-            <QuestionItem
-              key={index}
-              item={item}
-              displayNumber={displayNumber}
-              number={startNumber + index}
-              showAnswer={showAnswer}
-              editable={editable}
-              onEdit={onEdit}
-            />
+            <div key={index}>
+              {startsEssayPrompt && (
+                <h3 className="mb-2 font-semibold">
+                  Essay Prompt {item.essay_prompt_number} (Items {item.essay_prompt_start_number}–{item.essay_prompt_end_number})
+                </h3>
+              )}
+              <QuestionItem
+                item={item}
+                displayNumber={displayNumber}
+                number={number}
+                showAnswer={showAnswer}
+                editable={editable}
+                onEdit={onEdit}
+              />
+            </div>
           );
         })}
       </div>
@@ -970,13 +989,25 @@ function AnswerKeySection({ title, items, startNumber, isEssaySection = false, t
         <h3 className="font-semibold mb-2">{title}</h3>
         <div className="space-y-4">
           {items.map((item, index) => {
-            const displayNum = getEssayDisplayNumber(index, items, startNumber, totalTestItems);
+            const displayNum = item.question_number != null
+              ? String(item.question_number)
+              : getEssayDisplayNumber(index, items, startNumber, totalTestItems);
             const answer = formatAnswer(item);
+            const previousItem = items[index - 1];
+            const startsEssayPrompt = item.essay_prompt_group_id &&
+              item.essay_prompt_group_id !== previousItem?.essay_prompt_group_id;
             return (
-              <div key={index} className="p-3 bg-muted rounded">
-                <div className="font-semibold mb-1">{displayNum}.</div>
-                <div className="text-sm text-primary whitespace-pre-wrap leading-relaxed ml-4">
-                  {answer}
+              <div key={index}>
+                {startsEssayPrompt && (
+                  <h4 className="font-semibold mb-2">
+                    Essay Prompt {item.essay_prompt_number} rubric (Items {item.essay_prompt_start_number}–{item.essay_prompt_end_number})
+                  </h4>
+                )}
+                <div className="p-3 bg-muted rounded">
+                  <div className="font-semibold mb-1">{displayNum}.</div>
+                  <div className="text-sm text-primary whitespace-pre-wrap leading-relaxed ml-4">
+                    {answer}
+                  </div>
                 </div>
               </div>
             );
@@ -991,7 +1022,7 @@ function AnswerKeySection({ title, items, startNumber, isEssaySection = false, t
       <h3 className="font-semibold mb-2">{title}</h3>
       <div className="grid grid-cols-2 md:grid-cols-4 lg:grid-cols-5 gap-2">
         {items.map((item, index) => {
-          const displayNum = `${startNumber + index}`;
+          const displayNum = `${item.question_number ?? startNumber + index}`;
           return (
             <div key={index} className="flex items-center gap-2 p-2 bg-muted rounded text-sm">
               <span className="font-semibold">{displayNum}.</span>

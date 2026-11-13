@@ -3,6 +3,7 @@ import { Card, CardContent, CardHeader, CardTitle, CardDescription } from '@/com
 import { Button } from '@/components/ui/button';
 import { Input } from '@/components/ui/input';
 import { Label } from '@/components/ui/label';
+import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from '@/components/ui/select';
 import { Textarea } from '@/components/ui/textarea';
 import { Checkbox } from '@/components/ui/checkbox';
 import { Badge } from '@/components/ui/badge';
@@ -15,6 +16,8 @@ import { Wand2, Loader2, ChevronRight, ChevronLeft, Sparkles, RefreshCw, CheckCi
 import { useNavigate } from 'react-router-dom';
 import { Questions } from '@/services/db/questions';
 import { resolveSubjectMetadata } from '@/services/ai/subjectMetadataResolver';
+import { useAcademicHierarchy } from '@/hooks/useAcademicHierarchy';
+import { quickClassifyKnowledgeDimension } from '@/services/analysis/knowledgeDeterminer';
 
 interface GeneratedTopic {
   name: string;
@@ -99,8 +102,7 @@ function generateQuestionsForTopic(topic: string, subjectDesc: string): TopicQue
 
 export default function IntelligentTestGenerator() {
   const [step, setStep] = useState<1 | 2>(1);
-  const [subjectNumber, setSubjectNumber] = useState('');
-  const [subjectDescription, setSubjectDescription] = useState('');
+  const [subjectId, setSubjectId] = useState('');
   const [topics, setTopics] = useState<GeneratedTopic[]>([]);
   const [generatingTopics, setGeneratingTopics] = useState(false);
   const [generatingQuestions, setGeneratingQuestions] = useState(false);
@@ -110,33 +112,20 @@ export default function IntelligentTestGenerator() {
   const [saving, setSaving] = useState(false);
   const { toast } = useToast();
   const navigate = useNavigate();
+  const hierarchy = useAcademicHierarchy();
+  const selectedSubject = hierarchy.allSubjects.find(subject => subject.id === subjectId);
+  const subjectNumber = selectedSubject?.code || '';
+  const subjectDescription = selectedSubject?.description || '';
 
   const handleGenerateTopics = async () => {
-    if (!subjectDescription.trim()) {
-      toast({ title: 'Error', description: 'Please enter a subject.', variant: 'destructive' });
+    if (!selectedSubject) {
+      toast({ title: 'Error', description: 'Select a registered academic subject.', variant: 'destructive' });
       return;
     }
 
     setGeneratingTopics(true);
     try {
-      // Try AI-powered topic generation via edge function
       let generatedTopics: string[] = [];
-
-      try {
-        const { data, error } = await supabase.functions.invoke('generate-questions', {
-          body: {
-            action: 'generate-topics',
-            subject: subjectDescription,
-            count: 10,
-          }
-        });
-
-        if (!error && data?.topics) {
-          generatedTopics = data.topics;
-        }
-      } catch {
-        // Fallback: generate structured topics from description
-      }
 
       // Fallback topic generation if AI unavailable
       if (generatedTopics.length === 0) {
@@ -219,10 +208,10 @@ export default function IntelligentTestGenerator() {
       const { data: { user } } = await supabase.auth.getUser();
       if (!user) throw new Error('Not authenticated');
 
-      const allQuestions = generatedData.flatMap(td => [
+      const allQuestions = await Promise.all(generatedData.flatMap(td => [
         ...td.mcq, ...td.fill_blank, ...td.true_false, ...td.essay
-      ].map(q => {
-        const subjectMeta = resolveSubjectMetadata({
+      ].map(async q => {
+        const subjectMeta = await resolveSubjectMetadata({
           subject: `${subjectNumber} - ${subjectDescription}`,
           topic: td.topic,
           subject_code: subjectNumber,
@@ -236,6 +225,7 @@ export default function IntelligentTestGenerator() {
           correct_answer: q.correct_answer,
           bloom_level: q.bloom_level,
           difficulty: q.difficulty,
+          knowledge_dimension: quickClassifyKnowledgeDimension(q.question_text),
           topic: td.topic,
           subject: `${subjectNumber} - ${subjectDescription}`,
           category: subjectMeta.category,
@@ -246,7 +236,7 @@ export default function IntelligentTestGenerator() {
           approved: false,
           needs_review: true,
         };
-      }));
+      })));
 
       await Questions.bulkInsert(allQuestions);
 
@@ -276,16 +266,19 @@ export default function IntelligentTestGenerator() {
           <CardContent className="space-y-6">
             <div className="space-y-2">
               <Label>Subject</Label>
-              <Input
-                value={subjectDescription}
-                onChange={(e) => setSubjectDescription(e.target.value)}
-                placeholder="e.g., Introduction to Computer Science"
-              />
+              <Select value={subjectId} onValueChange={setSubjectId}>
+              <SelectTrigger><SelectValue placeholder="Select a registered subject" /></SelectTrigger>
+              <SelectContent>
+                {hierarchy.allSubjects.map(subject => (
+                  <SelectItem key={subject.id} value={subject.id}>{subject.code} - {subject.description}</SelectItem>
+                ))}
+              </SelectContent>
+              </Select>
             </div>
 
             <Button
               onClick={handleGenerateTopics}
-              disabled={generatingTopics || !subjectDescription.trim()}
+              disabled={generatingTopics || !selectedSubject}
               className="w-full"
               size="lg"
             >

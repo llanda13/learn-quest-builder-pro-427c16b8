@@ -21,6 +21,7 @@ import { useUserRole } from "@/hooks/useUserRole";
 import { useAcademicHierarchy } from "@/hooks/useAcademicHierarchy";
 import { Settings2 } from "lucide-react";
 import { normalizeCategory, normalizeSpecialization } from "@/utils/acronymNormalizer";
+import { matchesSubjectCodeFilter } from "@/utils/subjectCode";
 
 const ALL_BLOOM_LEVELS = ["Remembering", "Understanding", "Applying", "Analyzing", "Evaluating", "Creating"];
 
@@ -66,8 +67,6 @@ export default function QuestionBankManager() {
     subject_code: "",
     subject_description: "",
   });
-  const [formCustomCategory, setFormCustomCategory] = useState("");
-  const [formCustomSpecialization, setFormCustomSpecialization] = useState("");
   const [formDifficultyDomain, setFormDifficultyDomain] = useState<string[]>([]);
 
   const { data: questions, isLoading } = useQuery({
@@ -154,7 +153,7 @@ export default function QuestionBankManager() {
       });
     }
     if (filterSubjectCode !== "all") {
-      result = result.filter((q) => (q as any).subject_code === filterSubjectCode);
+      result = result.filter((q) => matchesSubjectCodeFilter((q as any).subject_code, filterSubjectCode));
     }
 
     return result;
@@ -180,14 +179,17 @@ export default function QuestionBankManager() {
 
   const formSubjectCodeOptions = useMemo(() => {
     if (!formData.specialization) return [] as { code: string; description: string }[];
-    const spec = hierarchy.allSpecializations.find(s => s.name === formData.specialization);
+    const category = hierarchy.categories.find((c) => c.name === formData.category);
+    const spec = category
+      ? hierarchy.getSpecializations(category.id).find((s) => s.name === formData.specialization)
+      : undefined;
     if (!spec) return [] as { code: string; description: string }[];
     return hierarchy.getSubjects(spec.id).map(s => ({ code: s.code, description: s.description }));
-  }, [formData.specialization, hierarchy.allSpecializations, hierarchy.allSubjects]);
+  }, [formData.category, formData.specialization, hierarchy.categories, hierarchy.allSpecializations, hierarchy.allSubjects]);
 
   // --- Mutations ---
   const createMutation = useMutation({
-    mutationFn: async (data: typeof formData) => {
+    mutationFn: async (data: typeof formData & { metadata?: { academic_subject_id: string } }) => {
       return await Questions.create({
         ...data,
         created_by: "admin",
@@ -258,8 +260,6 @@ export default function QuestionBankManager() {
       subject_code: "",
       subject_description: "",
     });
-    setFormCustomCategory("");
-    setFormCustomSpecialization("");
     setFormDifficultyDomain([]);
     setIsCreating(false);
     setEditingId(null);
@@ -284,20 +284,42 @@ export default function QuestionBankManager() {
       subject_code: (question as any).subject_code || "",
       subject_description: (question as any).subject_description || "",
     });
-    setFormCustomCategory("");
-    setFormCustomSpecialization("");
     setFormDifficultyDomain([]);
   };
 
   const handleSubmit = () => {
-    // Apply custom category/specialization if set
     const finalData = { ...formData };
-    if (formCustomCategory) finalData.category = formCustomCategory;
-    if (formCustomSpecialization) finalData.specialization = formCustomSpecialization;
 
-    // Normalize acronyms/full forms before saving
-    finalData.category = normalizeCategory(finalData.category) || finalData.category;
-    finalData.specialization = normalizeSpecialization(finalData.specialization) || finalData.specialization;
+    const category = hierarchy.categories.find((item) => item.name === finalData.category);
+    const specialization = category
+      ? hierarchy.getSpecializations(category.id).find((item) => item.name === finalData.specialization)
+      : undefined;
+    const subject = specialization
+      ? hierarchy.getSubjects(specialization.id).find((item) => item.code === finalData.subject_code)
+      : undefined;
+
+    if (!category || !specialization || !subject) {
+      toast.error("Select a registered Category, Specialization, and Subject Code before saving.");
+      return;
+    }
+    if (editingId) {
+      const currentQuestion = questions?.find((question) => question.id === editingId);
+      if (currentQuestion && (
+        (currentQuestion as any).category !== category.name
+        || (currentQuestion as any).specialization !== specialization.name
+        || (currentQuestion as any).subject_code !== subject.code
+        || (currentQuestion as any).subject_description !== subject.description
+      )) {
+        toast.error("Subject assignments cannot be changed through ordinary editing. Use a separately reviewed subject correction process.");
+        return;
+      }
+    }
+
+    finalData.category = category.name;
+    finalData.specialization = specialization.name;
+    finalData.subject_code = subject.code;
+    finalData.subject_description = subject.description;
+    finalData.subject = `${subject.code} - ${subject.description}`;
 
     // Map difficulty domain checkboxes to the difficulty field (DB expects lowercase)
     if (!finalData.difficulty && formDifficultyDomain.length > 0) {
@@ -325,7 +347,10 @@ export default function QuestionBankManager() {
     }
 
     if (editingId) updateMutation.mutate({ id: editingId, data: finalData });
-    else createMutation.mutate(finalData);
+    else createMutation.mutate({
+      ...finalData,
+      metadata: { academic_subject_id: subject.id },
+    });
   };
 
   const toggleSelect = (id: string) => {
@@ -408,6 +433,20 @@ export default function QuestionBankManager() {
                 {qAny.specialization}
               </Badge>
             )}
+            {qAny.subject_code && (
+              <>
+                <span className="text-muted-foreground">|</span>
+                <Badge variant="outline" className="text-xs">
+                  {qAny.subject_code}
+                </Badge>
+              </>
+            )}
+            {q.topic && (
+              <>
+                <span className="text-muted-foreground">|</span>
+                <span>Topic: {q.topic}</span>
+              </>
+            )}
             <span className="text-muted-foreground">|</span>
             <Badge variant="outline" className="text-xs">
               {ts.year}
@@ -451,15 +490,9 @@ export default function QuestionBankManager() {
           <div className="space-y-2">
             <Label>Category</Label>
             <Select
-              value={formCustomCategory ? "__custom__" : formData.category || undefined}
+              value={formData.category || undefined}
               onValueChange={(v) => {
-                if (v === "__custom__") {
-                  setFormCustomCategory(" ");
-                  setFormData({ ...formData, category: "", specialization: "", subject_code: "", subject_description: "" });
-                } else {
-                  setFormCustomCategory("");
-                  setFormData({ ...formData, category: v, specialization: "", subject_code: "", subject_description: "" });
-                }
+                setFormData({ ...formData, category: v, specialization: "", subject_code: "", subject_description: "", subject: "" });
               }}
             >
               <SelectTrigger><SelectValue placeholder="Select category" /></SelectTrigger>
@@ -467,49 +500,25 @@ export default function QuestionBankManager() {
                 {hierarchy.categories.map((c) => (
                   <SelectItem key={c.id} value={c.name}>{c.name}</SelectItem>
                 ))}
-                <SelectItem value="__custom__">Other (type below)</SelectItem>
               </SelectContent>
             </Select>
-            {formCustomCategory !== "" && (
-              <Input
-                placeholder="Enter custom category"
-                value={formCustomCategory.trim()}
-                onChange={(e) => setFormCustomCategory(e.target.value)}
-                className="mt-1"
-              />
-            )}
           </div>
           <div className="space-y-2">
             <Label>Specialization</Label>
             <Select
-              value={formCustomSpecialization ? "__custom__" : formData.specialization || undefined}
+              value={formData.specialization || undefined}
               onValueChange={(v) => {
-                if (v === "__custom__") {
-                  setFormCustomSpecialization(" ");
-                  setFormData({ ...formData, specialization: "", subject_code: "", subject_description: "" });
-                } else {
-                  setFormCustomSpecialization("");
-                  setFormData({ ...formData, specialization: v, subject_code: "", subject_description: "" });
-                }
+                setFormData({ ...formData, specialization: v, subject_code: "", subject_description: "", subject: "" });
               }}
-              disabled={!formData.category && !formCustomCategory}
+              disabled={!formData.category}
             >
               <SelectTrigger><SelectValue placeholder="Select specialization" /></SelectTrigger>
               <SelectContent>
                 {formSpecializationOptions.map((s) => (
                   <SelectItem key={s} value={s}>{s}</SelectItem>
                 ))}
-                <SelectItem value="__custom__">Other (type below)</SelectItem>
               </SelectContent>
             </Select>
-            {formCustomSpecialization !== "" && (
-              <Input
-                placeholder="Enter custom specialization"
-                value={formCustomSpecialization.trim()}
-                onChange={(e) => setFormCustomSpecialization(e.target.value)}
-                className="mt-1"
-              />
-            )}
           </div>
         </div>
 
@@ -517,12 +526,17 @@ export default function QuestionBankManager() {
         <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
           <div className="space-y-2">
             <Label>Subject Code</Label>
-            {formSubjectCodeOptions.length > 0 && !formCustomSpecialization ? (
+            {formSubjectCodeOptions.length > 0 ? (
               <Select
                 value={formData.subject_code || undefined}
                 onValueChange={(v) => {
                   const match = formSubjectCodeOptions.find(s => s.code === v);
-                  setFormData({ ...formData, subject_code: v, subject_description: match?.description || "" });
+                  setFormData({
+                    ...formData,
+                    subject_code: v,
+                    subject_description: match?.description || "",
+                    subject: match ? `${match.code} - ${match.description}` : "",
+                  });
                 }}
               >
                 <SelectTrigger><SelectValue placeholder="Select code" /></SelectTrigger>
@@ -533,11 +547,10 @@ export default function QuestionBankManager() {
                 </SelectContent>
               </Select>
             ) : (
-              <Input
-                placeholder="Enter subject code"
-                value={formData.subject_code}
-                onChange={(e) => setFormData({ ...formData, subject_code: e.target.value })}
-              />
+              <Select disabled value={undefined}>
+                <SelectTrigger><SelectValue placeholder="Select Category and Specialization first" /></SelectTrigger>
+                <SelectContent />
+              </Select>
             )}
           </div>
           <div className="space-y-2">
@@ -546,8 +559,8 @@ export default function QuestionBankManager() {
               placeholder="Subject description"
               value={formData.subject_description}
               onChange={(e) => setFormData({ ...formData, subject_description: e.target.value })}
-              className={formData.subject_description && !formCustomSpecialization && formSubjectCodeOptions.length > 0 ? "bg-muted" : ""}
-              readOnly={!!formData.subject_description && !formCustomSpecialization && formSubjectCodeOptions.length > 0}
+              className="bg-muted"
+              readOnly
             />
           </div>
         </div>
