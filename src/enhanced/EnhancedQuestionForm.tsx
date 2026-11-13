@@ -19,7 +19,7 @@ import {
   RefreshCw
 } from 'lucide-react';
 import { useEnhancedClassification } from '@/hooks/useEnhancedClassification';
-import { TaxonomyMatrix } from '@/components/classification/TaxonomyMatrix';
+import { TaxonomyMatrix } from '../classification/TaxonomyMatrix';
 import { toast } from 'sonner';
 
 interface EnhancedQuestionFormProps {

@@ -1,5 +1,4 @@
-import { useState, useEffect } from "react";
-import { usePersistentState, clearPersistedState } from "@/hooks/usePersistentState";
+import { useState } from "react";
 import { useForm } from "react-hook-form";
 import { zodResolver } from "@hookform/resolvers/zod";
 import * as z from "zod";
@@ -12,11 +11,14 @@ import { Select, SelectContent, SelectItem, SelectTrigger, SelectValue } from "@
 import { RadioGroup, RadioGroupItem } from "@/components/ui/radio-group";
 import { Label } from "@/components/ui/label";
 import { useToast } from "@/hooks/use-toast";
-import { Questions } from "@/services/db/questions";
 import { useAcademicHierarchy } from "@/hooks/useAcademicHierarchy";
+import { Questions } from "@/services/db/questions";
 import { Plus, Trash2 } from "lucide-react";
 
 const questionSchema = z.object({
+  category: z.string().min(1, "Category is required"),
+  specialization: z.string().min(1, "Specialization is required"),
+  subject_code: z.string().min(1, "Subject code is required"),
   topic: z.string().min(1, "Topic is required"),
   text: z.string().min(10, "Question text must be at least 10 characters"),
   type: z.enum(["mcq", "essay", "tf", "fill"]),
@@ -57,14 +59,17 @@ const topics = [
   "Testing and Quality Assurance"
 ];
 
-const DRAFT_KEY = "questionbank-form.draft";
-
 export function QuestionBankForm({ onSuccess }: QuestionBankFormProps) {
-  const [draft, setDraft, clearDraft] = usePersistentState<{
-    values: Partial<QuestionFormData>;
-    choices: string[];
-  }>(DRAFT_KEY, {
-    values: {
+  const [choices, setChoices] = useState<string[]>(["", "", "", ""]);
+  const { toast } = useToast();
+  const hierarchy = useAcademicHierarchy();
+
+  const form = useForm<QuestionFormData>({
+    resolver: zodResolver(questionSchema),
+    defaultValues: {
+      category: "",
+      specialization: "",
+      subject_code: "",
       topic: "",
       text: "",
       type: "mcq",
@@ -73,37 +78,19 @@ export function QuestionBankForm({ onSuccess }: QuestionBankFormProps) {
       difficulty: "Easy",
       knowledge_dimension: "",
     },
-    choices: ["", "", "", ""],
   });
-
-  const [choices, setChoices] = useState<string[]>(draft.choices ?? ["", "", "", ""]);
-  const [subjectId, setSubjectId] = useState("");
-  const { toast } = useToast();
-  const hierarchy = useAcademicHierarchy();
-  const selectedSubject = hierarchy.allSubjects.find((subject) => subject.id === subjectId);
-
-  const form = useForm<QuestionFormData>({
-    resolver: zodResolver(questionSchema),
-    defaultValues: {
-      topic: draft.values.topic ?? "",
-      text: draft.values.text ?? "",
-      type: (draft.values.type as QuestionFormData["type"]) ?? "mcq",
-      correct_answer: draft.values.correct_answer ?? "",
-      bloom_level: draft.values.bloom_level ?? "",
-      difficulty: draft.values.difficulty ?? "Easy",
-      knowledge_dimension: draft.values.knowledge_dimension ?? "",
-    },
-  });
-
-  // Persist every field change so a tab switch / refresh never wipes input.
-  useEffect(() => {
-    const sub = form.watch((values) => {
-      setDraft({ values: values as Partial<QuestionFormData>, choices });
-    });
-    return () => sub.unsubscribe();
-  }, [form, choices, setDraft]);
 
   const questionType = form.watch("type");
+  const selectedCategory = form.watch("category");
+  const selectedSpecialization = form.watch("specialization");
+  const categoryRecord = hierarchy.categories.find((category) => category.name === selectedCategory);
+  const specializationOptions = categoryRecord
+    ? hierarchy.getSpecializations(categoryRecord.id)
+    : [];
+  const specializationRecord = specializationOptions.find((specialization) => specialization.name === selectedSpecialization);
+  const subjectOptions = specializationRecord
+    ? hierarchy.getSubjects(specializationRecord.id)
+    : [];
 
   const addChoice = () => {
     setChoices([...choices, ""]);
@@ -122,16 +109,26 @@ export function QuestionBankForm({ onSuccess }: QuestionBankFormProps) {
   };
 
   const onSubmit = async (data: QuestionFormData) => {
-    if (!selectedSubject) {
-      toast({
-        title: "Registered subject required",
-        description: "Select an academic subject from the registered subject list before saving.",
-        variant: "destructive",
-      });
-      return;
-    }
     try {
+      const selectedCategoryRecord = hierarchy.categories.find((category) => category.name === data.category);
+      const selectedSpecializationRecord = selectedCategoryRecord
+        ? hierarchy.getSpecializations(selectedCategoryRecord.id).find((specialization) => specialization.name === data.specialization)
+        : undefined;
+      const selectedSubject = selectedSpecializationRecord
+        ? hierarchy.getSubjects(selectedSpecializationRecord.id).find((subject) => subject.code === data.subject_code)
+        : undefined;
+
+      if (!selectedCategoryRecord || !selectedSpecializationRecord || !selectedSubject) {
+        throw new Error("Select a valid category, specialization, and subject from the academic subject list.");
+      }
+
       const questionData = {
+        category: selectedCategoryRecord.name,
+        specialization: selectedSpecializationRecord.name,
+        subject: `${selectedSubject.code} - ${selectedSubject.description}`,
+        subject_code: selectedSubject.code,
+        subject_description: selectedSubject.description,
+        metadata: { academic_subject_id: selectedSubject.id },
         topic: data.topic,
         question_text: data.text,
         question_type: data.type,
@@ -143,12 +140,6 @@ export function QuestionBankForm({ onSuccess }: QuestionBankFormProps) {
         bloom_level: data.bloom_level,
         difficulty: data.difficulty,
         knowledge_dimension: data.knowledge_dimension,
-        category: selectedSubject.category_name || "",
-        specialization: selectedSubject.specialization_name || "",
-        subject: `${selectedSubject.code} - ${selectedSubject.description}`,
-        subject_code: selectedSubject.code,
-        subject_description: selectedSubject.description,
-        metadata: { academic_subject_id: selectedSubject.id },
         created_by: "teacher",
         approved: false,
         needs_review: false
@@ -163,9 +154,6 @@ export function QuestionBankForm({ onSuccess }: QuestionBankFormProps) {
 
       form.reset();
       setChoices(["", "", "", ""]);
-      setSubjectId("");
-      clearDraft();
-      clearPersistedState(DRAFT_KEY);
       onSuccess();
     } catch (error) {
       console.error('Error saving question:', error)
@@ -185,22 +173,103 @@ export function QuestionBankForm({ onSuccess }: QuestionBankFormProps) {
       <CardContent>
         <Form {...form}>
           <form onSubmit={form.handleSubmit(onSubmit)} className="space-y-6">
-            <div className="space-y-2">
-              <Label htmlFor="registered-subject">Registered academic subject</Label>
-              <Select value={subjectId} onValueChange={setSubjectId}>
-                <SelectTrigger id="registered-subject">
-                  <SelectValue placeholder="Select a subject" />
-                </SelectTrigger>
-                <SelectContent>
-                  {hierarchy.allSubjects.map((subject) => (
-                    <SelectItem key={subject.id} value={subject.id}>
-                      {subject.code} - {subject.description}
-                    </SelectItem>
-                  ))}
-                </SelectContent>
-              </Select>
-            </div>
             <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+              <FormField
+                control={form.control}
+                name="category"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Category</FormLabel>
+                    <Select
+                      value={field.value}
+                      onValueChange={(value) => {
+                        field.onChange(value);
+                        form.setValue("specialization", "");
+                        form.setValue("subject_code", "");
+                      }}
+                    >
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select category" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        {hierarchy.categories.map((category) => (
+                          <SelectItem key={category.id} value={category.name}>{category.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="specialization"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Specialization</FormLabel>
+                    <Select
+                      value={field.value}
+                      disabled={!categoryRecord}
+                      onValueChange={(value) => {
+                        field.onChange(value);
+                        form.setValue("subject_code", "");
+                      }}
+                    >
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select specialization" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        {specializationOptions.map((specialization) => (
+                          <SelectItem key={specialization.id} value={specialization.name}>{specialization.name}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              <FormField
+                control={form.control}
+                name="subject_code"
+                render={({ field }) => (
+                  <FormItem>
+                    <FormLabel>Subject Code</FormLabel>
+                    <Select
+                      value={field.value}
+                      disabled={!specializationRecord}
+                      onValueChange={field.onChange}
+                    >
+                      <FormControl>
+                        <SelectTrigger>
+                          <SelectValue placeholder="Select subject code" />
+                        </SelectTrigger>
+                      </FormControl>
+                      <SelectContent>
+                        {subjectOptions.map((subject) => (
+                          <SelectItem key={subject.id} value={subject.code}>{subject.code} - {subject.description}</SelectItem>
+                        ))}
+                      </SelectContent>
+                    </Select>
+                    <FormMessage />
+                  </FormItem>
+                )}
+              />
+
+              {form.watch("subject_code") && (
+                <div className="space-y-2">
+                  <Label>Subject Description</Label>
+                  <p className="min-h-10 rounded-md border bg-muted px-3 py-2 text-sm">
+                    {subjectOptions.find((subject) => subject.code === form.watch("subject_code"))?.description || ""}
+                  </p>
+                </div>
+              )}
+
               <FormField
                 control={form.control}
                 name="topic"

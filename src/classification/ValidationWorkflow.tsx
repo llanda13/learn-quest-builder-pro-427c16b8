@@ -45,52 +45,6 @@ export const ValidationWorkflow: React.FC<ValidationWorkflowProps> = ({
     refresh
   } = useClassificationValidation();
 
-  // Setup real-time subscriptions
-  useEffect(() => {
-    const { supabase } = require('@/integrations/supabase/client');
-    
-    // Subscribe to questions table changes
-    const questionsChannel = supabase
-      .channel('validation-questions-changes')
-      .on(
-        'postgres_changes',
-        {
-          event: '*',
-          schema: 'public',
-          table: 'questions',
-          filter: 'validation_status=eq.pending'
-        },
-        (payload: any) => {
-          console.log('Question validation status changed:', payload);
-          refresh(); // Refresh the pending validations
-        }
-      )
-      .subscribe();
-
-    // Subscribe to classification_validations table
-    const validationsChannel = supabase
-      .channel('validation-workflow-changes')
-      .on(
-        'postgres_changes',
-        {
-          event: 'INSERT',
-          schema: 'public',
-          table: 'classification_validations'
-        },
-        (payload: any) => {
-          console.log('New validation submitted:', payload);
-          toast.success('New validation recorded');
-          refresh();
-        }
-      )
-      .subscribe();
-
-    return () => {
-      supabase.removeChannel(questionsChannel);
-      supabase.removeChannel(validationsChannel);
-    };
-  }, [refresh]);
-
   useEffect(() => {
     if (selectedQuestionId) {
       loadValidationHistory();

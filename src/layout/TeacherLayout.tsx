@@ -5,8 +5,9 @@ import { supabase } from '@/integrations/supabase/client';
 import { 
   LayoutDashboard, 
   FileText, 
+  Sparkles, 
   Clock,
-  BarChart3,
+  
   Settings,
   LogOut,
   ChevronLeft,
@@ -14,14 +15,18 @@ import {
   User,
   BookOpen,
   Database,
+  ClipboardCheck,
   Menu,
-  X
+  X,
+  Brain
 } from "lucide-react";
 import { cn } from "@/lib/utils";
 import { Button } from "@/components/ui/button";
 import { Avatar, AvatarFallback, AvatarImage } from "@/components/ui/avatar";
 import { Sheet, SheetContent, SheetTrigger } from "@/components/ui/sheet";
 import { BrandLogo } from "@/components/BrandLogo";
+import { useUserRole } from "@/hooks/useUserRole";
+
 
 const teacherMenuItems = [
   { 
@@ -55,10 +60,10 @@ const teacherMenuItems = [
     description: "Saved specifications" 
   },
   { 
-    title: "Reports", 
-    href: "/teacher/reports", 
-    icon: BarChart3,
-    description: "Usage statistics" 
+    title: "AI Assistant", 
+    href: "/teacher/ai-assistant", 
+    icon: Brain,
+    description: "Academic AI helper" 
   },
 ];
 
@@ -81,6 +86,7 @@ export function TeacherLayout({ children }: TeacherLayoutProps) {
   const [profile, setProfile] = useState<{ full_name?: string; avatar_url?: string } | null>(null);
   const location = useLocation();
   const { user, signOut } = useAuth();
+  const { isValidator } = useUserRole();
 
   useEffect(() => {
     if (user) {
@@ -144,27 +150,18 @@ export function TeacherLayout({ children }: TeacherLayoutProps) {
             </Button>
           )}
         </div>
-
-        {(!collapsed || isMobile) && (
-          <div className="flex items-center gap-3 rounded-lg bg-muted/50 p-2">
-            <Avatar className="h-9 w-9">
-              <AvatarImage src={profile?.avatar_url} alt={displayName} />
-              <AvatarFallback className="bg-primary text-primary-foreground text-xs">
-                {getInitials(profile?.full_name)}
-              </AvatarFallback>
-            </Avatar>
-            <div className="min-w-0 flex-1">
-              <div className="font-medium text-sm truncate">{displayName}</div>
-              <div className="text-xs text-muted-foreground truncate">Teacher</div>
-            </div>
-          </div>
-        )}
       </div>
+
 
 
       {/* Main Navigation */}
       <nav className="flex-1 p-2 space-y-1 overflow-y-auto">
-        {teacherMenuItems.map((item) => {
+        {[...teacherMenuItems, ...(isValidator ? [{
+          title: "Expert Validation",
+          href: "/validator/pending",
+          icon: ClipboardCheck,
+          description: "Review generated tests",
+        }] : [])].map((item) => {
           const Icon = item.icon;
           const active = isActive(item.href);
           
@@ -230,8 +227,26 @@ export function TeacherLayout({ children }: TeacherLayoutProps) {
         </button>
       </nav>
 
+      {/* Profile - bottom */}
+      {(!collapsed || isMobile) && (
+        <div className="p-4 border-t border-border">
+          <div className="flex items-center gap-3">
+            <Avatar className="h-9 w-9">
+              <AvatarImage src={profile?.avatar_url} alt={displayName} />
+              <AvatarFallback className="bg-primary text-primary-foreground text-xs">
+                {getInitials(profile?.full_name)}
+              </AvatarFallback>
+            </Avatar>
+            <div className="min-w-0 flex-1">
+              <div className="font-medium text-sm truncate">{displayName}</div>
+              <div className="text-xs text-muted-foreground truncate">Teacher</div>
+            </div>
+          </div>
+        </div>
+      )}
     </>
   );
+
 
   return (
     <div className="min-h-screen bg-background flex" data-sidebar-provider="true">
@@ -255,6 +270,7 @@ export function TeacherLayout({ children }: TeacherLayoutProps) {
             <span className="font-bold truncate">TestBank</span>
           </div>
         </div>
+
         <Avatar className="h-8 w-8">
           <AvatarImage src={profile?.avatar_url} alt={displayName} />
           <AvatarFallback className="bg-gradient-to-br from-blue-500 to-purple-500 text-white text-xs">

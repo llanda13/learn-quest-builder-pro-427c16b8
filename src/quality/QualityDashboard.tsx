@@ -16,6 +16,7 @@ import {
   Settings
 } from 'lucide-react';
 import { iso25010Evaluator, type QualityAssessment } from '@/services/quality/iso25010Evaluator';
+import { QualityMetricsChart } from './QualityMetricsChart';
 import { toast } from 'sonner';
 
 export const QualityDashboard: React.FC = () => {
@@ -209,6 +210,9 @@ export const QualityDashboard: React.FC = () => {
           </div>
         </CardContent>
       </Card>
+
+      {/* Quality Metrics Visualization */}
+      <QualityMetricsChart characteristics={assessment.characteristics} />
 
       {/* Quality Characteristics Grid */}
       <div className="grid grid-cols-1 md:grid-cols-2 lg:grid-cols-4 gap-4">

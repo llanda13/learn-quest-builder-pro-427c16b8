@@ -89,6 +89,7 @@ export function TOSForm({ config, onConfigChange, onGenerate }: TOSFormProps) {
         school_year: tosConfig.schoolYear,
         total_items: tosConfig.totalItems,
         prepared_by: tosConfig.preparedBy,
+        checked_by: tosConfig.checkedBy,
         noted_by: tosConfig.notedBy,
         created_by: 'teacher'
       };
@@ -333,7 +334,7 @@ export function TOSForm({ config, onConfigChange, onGenerate }: TOSFormProps) {
           </CardDescription>
         </CardHeader>
         <CardContent className="space-y-4">
-          <div className="grid grid-cols-1 md:grid-cols-2 gap-4">
+          <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
             <div className="space-y-2">
               <Label htmlFor="preparedBy">Prepared By</Label>
               <Input
@@ -343,6 +344,16 @@ export function TOSForm({ config, onConfigChange, onGenerate }: TOSFormProps) {
                 placeholder="Teacher Name"
               />
               {errors.preparedBy && <p className="text-sm text-destructive">{errors.preparedBy}</p>}
+            </div>
+
+            <div className="space-y-2">
+              <Label htmlFor="checkedBy">Checked and Reviewed By</Label>
+              <Input
+                id="checkedBy"
+                value={config.checkedBy}
+                onChange={(e) => updateConfig({ checkedBy: e.target.value })}
+                placeholder="Program Chair Name"
+              />
             </div>
 
             <div className="space-y-2">
