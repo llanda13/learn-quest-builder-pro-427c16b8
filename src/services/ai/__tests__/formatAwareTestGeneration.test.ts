@@ -158,7 +158,7 @@ describe('format-aware generation enforcement', () => {
       topic: slot.topic,
       bloom_level: slot.bloom_level,
       difficulty: slot.difficulty,
-      knowledge_dimension: slot.knowledge_dimension,
+      knowledge_dimension: slot.knowledge_dimension.toLowerCase(),
       rejected_questions: [{ question: 'Rejected question text', reason: 'Duplicate of question 3' }]
     });
   });
