@@ -2143,6 +2143,7 @@ export type Database = {
           distribution: Json | null
           exam_period: string | null
           id: string
+          last_reused_at: string | null
           matrix: Json | null
           noted_by: string | null
           owner: string | null
@@ -2166,6 +2167,7 @@ export type Database = {
           distribution?: Json | null
           exam_period?: string | null
           id?: string
+          last_reused_at?: string | null
           matrix?: Json | null
           noted_by?: string | null
           owner?: string | null
@@ -2189,6 +2191,7 @@ export type Database = {
           distribution?: Json | null
           exam_period?: string | null
           id?: string
+          last_reused_at?: string | null
           matrix?: Json | null
           noted_by?: string | null
           owner?: string | null
